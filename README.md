@@ -77,6 +77,10 @@ processing takes it from there: switching slots, starting the item use, and
 sending whatever packets that naturally implies. The mod never touches
 inventory contents, networking, or server state directly.
 
+## Credits
+
+Built with the help of [Claude Code](https://claude.com/claude-code).
+
 ## License
 
 MIT
