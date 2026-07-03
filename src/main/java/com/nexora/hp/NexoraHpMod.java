@@ -55,6 +55,7 @@ public class NexoraHpMod implements ClientModInitializer {
     private static boolean panicCanHeal = true;
     private static long panicCooldownEndsAt = 0L;
     private static long panicCooldownDurationMillis = 0L;
+    private static boolean panicRotatePending = false;
     private static boolean panicReleasePending = false;
     private static int panicOriginalSlot = -1;
     private static float panicOriginalPitch = 0f;
@@ -93,7 +94,7 @@ public class NexoraHpMod implements ClientModInitializer {
             originalSlot = -1;
         }
 
-        // Same for panic heal, plus snapping the camera pitch back to where it was looking before.
+        // Panic heal release: put the used item's slot and our look direction back.
         if (panicReleasePending) {
             KeyMapping.set(boundKey(client.options.keyUse), false);
             panicReleasePending = false;
@@ -103,6 +104,14 @@ public class NexoraHpMod implements ClientModInitializer {
             }
             panicOriginalSlot = -1;
             player.setXRot(panicOriginalPitch);
+        } else if (panicRotatePending) {
+            // The look-down from last tick has now been applied for a full tick -- the client's
+            // normal per-tick sync already reported it to the server via a rotation packet before
+            // this callback runs (LocalPlayer.tick() happens earlier in the same tick). Only now
+            // do we switch to the item's slot and use it, so the server sees "looking down" before
+            // it sees "used the item", exactly matching what the item requires.
+            panicRotatePending = false;
+            beginPanicUse(client, player);
         }
 
         if (!NexoraHpConfig.enabled) {
@@ -125,12 +134,13 @@ public class NexoraHpMod implements ClientModInitializer {
         needPanic = NexoraHpConfig.panicEnabled && maxHp > 0f
                 && currentHp < maxHp * (NexoraHpConfig.panicThresholdPercent / 100f);
 
-        // Panic heal takes priority and is mutually exclusive with the regular heal on any given
-        // tick, since both switch hotbar slots and would otherwise fight over which slot "wins"
-        // in the game's own input processing if both were queued in the same tick.
-        if (needPanic && panicCanHeal) {
-            triggerPanicHeal(client, player, now);
-        } else if (needHeal && canHeal) {
+        // Panic heal takes priority and is mutually exclusive with the regular heal while either
+        // is in flight, since both switch hotbar slots and would otherwise fight over which slot
+        // "wins" in the game's own input processing if both were queued in the same tick.
+        boolean panicBusy = panicRotatePending || panicReleasePending;
+        if (!panicBusy && needPanic && panicCanHeal) {
+            beginPanicRotate(player, now);
+        } else if (!panicBusy && needHeal && canHeal) {
             triggerHeal(client, player, now);
         }
     }
@@ -156,7 +166,24 @@ public class NexoraHpMod implements ClientModInitializer {
         }
     }
 
-    private static void triggerPanicHeal(Minecraft client, LocalPlayer player, long now) {
+    /** Phase 1: look straight down. The slot switch and item use happen a full tick later. */
+    private static void beginPanicRotate(LocalPlayer player, long now) {
+        // This item needs the player looking at the ground to use. Snap the pitch straight down --
+        // the same field the game's own mouse-look updates via player.turn()/setXRot(). The
+        // client's normal per-tick sync then reports this new look direction to the server on its
+        // own, exactly like a real mouse movement would. We never touch networking directly.
+        panicOriginalPitch = player.getXRot();
+        player.setXRot(90.0F);
+        panicRotatePending = true;
+
+        // Commit to the cooldown immediately so the trigger condition can't fire again mid-sequence.
+        panicCanHeal = false;
+        panicCooldownDurationMillis = NexoraHpConfig.panicCooldownSeconds * 1000L + 500L;
+        panicCooldownEndsAt = now + panicCooldownDurationMillis;
+    }
+
+    /** Phase 2: now that we're confirmed looking down, switch to the item and use it. */
+    private static void beginPanicUse(Minecraft client, LocalPlayer player) {
         int panicSlotIndex = NexoraHpConfig.panicHotbarSlot - 1;
         int selectedSlot = player.getInventory().getSelectedSlot();
 
@@ -165,19 +192,8 @@ public class NexoraHpMod implements ClientModInitializer {
             KeyMapping.click(boundKey(client.options.keyHotbarSlots[panicSlotIndex]));
         }
 
-        // This item needs the player looking at the ground to use. Snap the pitch straight down
-        // (same field the game's own mouse-look updates, via player.turn()/setXRot() -- the
-        // client's normal per-tick sync then reports this new look direction to the server on
-        // its own, exactly like a real mouse movement would. We never touch networking directly.
-        panicOriginalPitch = player.getXRot();
-        player.setXRot(90.0F);
-
         KeyMapping.set(boundKey(client.options.keyUse), true);
         panicReleasePending = true;
-
-        panicCanHeal = false;
-        panicCooldownDurationMillis = NexoraHpConfig.panicCooldownSeconds * 1000L + 500L;
-        panicCooldownEndsAt = now + panicCooldownDurationMillis;
 
         if (NexoraHpConfig.soundEnabled) {
             client.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.EXPERIENCE_ORB_PICKUP, 1.4F));
