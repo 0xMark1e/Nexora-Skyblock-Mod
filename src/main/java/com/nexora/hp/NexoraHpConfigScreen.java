@@ -35,7 +35,7 @@ public class NexoraHpConfigScreen extends Screen {
         this.sectionHeaders.clear();
 
         int centerX = this.width / 2;
-        int y = this.height / 2 - 100;
+        int y = this.height / 2 - 165;
         this.panelTop = y - 40;
         y += 10; // keep the first section header clear of the title text above it
 
@@ -70,6 +70,39 @@ public class NexoraHpConfigScreen extends Screen {
             b.setMessage(cooldownLabel());
         }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
         this.addRenderableWidget(cooldownButton);
+        y += SPACING + SECTION_GAP;
+
+        y = section(centerX, y, "PANIC HEAL");
+
+        Button panicEnabledButton = Button.builder(panicEnabledLabel(), b -> {
+            NexoraHpConfig.panicEnabled = !NexoraHpConfig.panicEnabled;
+            b.setMessage(panicEnabledLabel());
+        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
+        this.addRenderableWidget(panicEnabledButton);
+        y += SPACING;
+
+        Button panicThresholdButton = Button.builder(panicThresholdLabel(), b -> {
+            NexoraHpConfig.panicThresholdPercent += 5;
+            if (NexoraHpConfig.panicThresholdPercent > 90) {
+                NexoraHpConfig.panicThresholdPercent = 5;
+            }
+            b.setMessage(panicThresholdLabel());
+        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
+        this.addRenderableWidget(panicThresholdButton);
+        y += SPACING;
+
+        Button panicSlotButton = Button.builder(panicSlotLabel(), b -> {
+            NexoraHpConfig.panicHotbarSlot = NexoraHpConfig.panicHotbarSlot % 9 + 1;
+            b.setMessage(panicSlotLabel());
+        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
+        this.addRenderableWidget(panicSlotButton);
+        y += SPACING;
+
+        Button panicCooldownButton = Button.builder(panicCooldownLabel(), b -> {
+            NexoraHpConfig.panicCooldownSeconds = NexoraHpConfig.panicCooldownSeconds % 60 + 1;
+            b.setMessage(panicCooldownLabel());
+        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
+        this.addRenderableWidget(panicCooldownButton);
         y += SPACING + SECTION_GAP;
 
         y = section(centerX, y, "DISPLAY");
@@ -157,5 +190,21 @@ public class NexoraHpConfigScreen extends Screen {
 
     private static Component hudPositionLabel() {
         return Component.literal("HUD Position: " + NexoraHpConfig.hudPosition.name().replace('_', ' '));
+    }
+
+    private static Component panicEnabledLabel() {
+        return Component.literal("Panic Heal: " + (NexoraHpConfig.panicEnabled ? "ON" : "OFF"));
+    }
+
+    private static Component panicThresholdLabel() {
+        return Component.literal("Panic Below: " + NexoraHpConfig.panicThresholdPercent + "%");
+    }
+
+    private static Component panicSlotLabel() {
+        return Component.literal("Panic Item Slot: " + NexoraHpConfig.panicHotbarSlot);
+    }
+
+    private static Component panicCooldownLabel() {
+        return Component.literal("Panic Cooldown: " + NexoraHpConfig.panicCooldownSeconds + "s");
     }
 }
