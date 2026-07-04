@@ -1,4 +1,4 @@
-# Nexora-Wand
+# Nexora-Heal
 
 ![Minecraft](https://img.shields.io/badge/Minecraft-26.1-3B9F3B?logo=minecraft&logoColor=white)
 ![Fabric](https://img.shields.io/badge/Loader-Fabric-3E7DDA)
@@ -17,15 +17,10 @@ state directly, so it behaves identically in singleplayer and multiplayer.
 - **Auto-heal** — below a configurable HP%, switches to a set hotbar slot,
   simulates a right-click to use the item, then switches back to whatever
   slot you had selected.
-- **Panic heal** — a second, lower HP% threshold for an emergency item that
-  requires looking straight down to use. The mod snaps your pitch to the
-  ground, uses the item, and restores your exact previous look direction —
-  same key-simulation approach, no packets. Independent hotbar slot and
-  cooldown from the regular heal, and takes priority if both trigger at once.
-- **Cooldown-aware** — won't try again until each item's ability cooldown
-  (configurable per item) has actually passed.
+- **Cooldown-aware** — won't try again until the item's ability cooldown
+  (configurable) has actually passed.
 - **HUD indicator** — corner overlay (position configurable) showing live
-  HP%, heal-ready state, and a cooldown countdown bar for both heal types.
+  HP%, heal-ready state, and a cooldown countdown bar.
 - **Sound notification** — optional chime when a heal fires.
 - **`/showhp`** — prints current/max HP to chat.
 - **Settings screen** — `/nexora` in chat, or through
@@ -44,7 +39,7 @@ state directly, so it behaves identically in singleplayer and multiplayer.
 
 1. Install [Fabric Loader](https://fabricmc.net/use/) for Minecraft 26.1.
 2. Drop [Fabric API](https://modrinth.com/mod/fabric-api) and the built
-   `nexora-wand-<version>.jar` into your `mods` folder.
+   `nexora-heal-<version>.jar` into your `mods` folder.
 3. Launch the game, then run `/nexora` to configure your heal item slot.
 
 ## Building from source
@@ -56,11 +51,11 @@ needed — Loom compiles directly against the game jar.
 ./gradlew build
 ```
 
-The output jar will be at `build/libs/nexora-wand-<version>.jar`.
+The output jar will be at `build/libs/nexora-heal-<version>.jar`.
 
 ## Configuration
 
-Settings live in `config/nexora-wand.properties` and are editable in-game via
+Settings live in `config/nexora-heal.properties` and are editable in-game via
 `/nexora`:
 
 | Setting | Description |
@@ -69,10 +64,6 @@ Settings live in `config/nexora-wand.properties` and are editable in-game via
 | Heal Below % | HP percentage that triggers a heal attempt |
 | Heal Item Slot | Hotbar slot (1-9) holding the heal item |
 | Cooldown | Item's ability cooldown in seconds (mod waits cooldown + 0.5s before trying again) |
-| Panic Heal | On/off toggle for the emergency look-down heal |
-| Panic Below % | HP percentage that triggers a panic heal attempt |
-| Panic Item Slot | Hotbar slot (1-9) holding the panic-heal item |
-| Panic Cooldown | Panic item's ability cooldown in seconds (+0.5s buffer) |
 | Heal Sound | Toggle the notification sound on heal |
 | HUD Position | Which screen corner the indicator is drawn in |
 
@@ -85,13 +76,6 @@ real press — `KeyMapping.click(...)` for the hotbar switch and
 processing takes it from there: switching slots, starting the item use, and
 sending whatever packets that naturally implies. The mod never touches
 inventory contents, networking, or server state directly.
-
-The panic heal's look-at-ground requirement works the same way: real mouse
-movement updates the player's pitch via `player.turn()`, which just writes
-to the same `getXRot()`/`setXRot()` fields the mod sets directly. A
-separate, always-running vanilla system (`LocalPlayer.tick()`) reads those
-fields every tick and reports the current look direction to the server on
-its own — the mod never constructs or sends a rotation packet itself.
 
 ## Credits
 

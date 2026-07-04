@@ -2,7 +2,9 @@ package com.nexora.hp;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntConsumer;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -12,9 +14,17 @@ public class NexoraHpConfigScreen extends Screen {
     private static final int PANEL_WIDTH = 240;
     private static final int BUTTON_WIDTH = 200;
     private static final int BUTTON_HEIGHT = 20;
-    private static final int SPACING = 24;
-    private static final int SECTION_GAP = 18;
+    private static final int SPACING = 22;
+    private static final int SECTION_GAP = 14;
+    private static final int SECTION_HEADER_HEIGHT = 14;
+    private static final int TITLE_HEIGHT = 36;
+    private static final int FOOTER_HEIGHT = 22;
     private static final int ACCENT_COLOR = 0xFF5CE6C7;
+
+    // Row counts per section, used to compute the panel's height up front so it's always
+    // correctly centered and sized instead of relying on a hand-tuned starting offset.
+    private static final int GENERAL_ROWS = 3;
+    private static final int DISPLAY_ROWS = 2;
 
     private final Screen parent;
 
@@ -23,21 +33,67 @@ public class NexoraHpConfigScreen extends Screen {
     private int panelBottom;
 
     public NexoraHpConfigScreen(Screen parent) {
-        super(Component.literal("Nexora-Wand"));
+        super(Component.literal("Nexora-Heal"));
         this.parent = parent;
     }
 
     private record SectionHeader(String text, int y) {
     }
 
+    /** A draggable percentage slider, snapped to 5% steps, over a fixed [min, max] range. */
+    private static final class PercentSlider extends AbstractSliderButton {
+        private final String label;
+        private final int min;
+        private final int max;
+        private final IntConsumer onChange;
+
+        PercentSlider(int x, int y, int width, int height, String label, int min, int max, int initialPercent,
+                IntConsumer onChange) {
+            super(x, y, width, height, Component.empty(), fraction(initialPercent, min, max));
+            this.label = label;
+            this.min = min;
+            this.max = max;
+            this.onChange = onChange;
+            this.updateMessage();
+        }
+
+        private static double fraction(int percent, int min, int max) {
+            return (percent - min) / (double) (max - min);
+        }
+
+        private int currentPercent() {
+            int raw = min + (int) Math.round(this.value * (max - min));
+            return Math.round(raw / 5f) * 5;
+        }
+
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Component.literal(label + ": " + currentPercent() + "%"));
+        }
+
+        @Override
+        protected void applyValue() {
+            onChange.accept(currentPercent());
+        }
+    }
+
+    private static int sectionHeight(int rows) {
+        return SECTION_HEADER_HEIGHT + rows * SPACING;
+    }
+
     @Override
     protected void init() {
         this.sectionHeaders.clear();
 
+        int contentHeight = sectionHeight(GENERAL_ROWS) + SECTION_GAP
+                + sectionHeight(DISPLAY_ROWS) + 12 + BUTTON_HEIGHT;
+        int panelHeight = TITLE_HEIGHT + contentHeight + FOOTER_HEIGHT;
+
         int centerX = this.width / 2;
-        int y = this.height / 2 - 165;
-        this.panelTop = y - 40;
-        y += 10; // keep the first section header clear of the title text above it
+        this.panelTop = Math.max(4, this.height / 2 - panelHeight / 2);
+        this.panelBottom = this.panelTop + panelHeight;
+
+        int y = this.panelTop + TITLE_HEIGHT;
 
         y = section(centerX, y, "GENERAL");
 
@@ -48,14 +104,9 @@ public class NexoraHpConfigScreen extends Screen {
         this.addRenderableWidget(enabledButton);
         y += SPACING;
 
-        Button thresholdButton = Button.builder(thresholdLabel(), b -> {
-            NexoraHpConfig.healThresholdPercent += 5;
-            if (NexoraHpConfig.healThresholdPercent > 95) {
-                NexoraHpConfig.healThresholdPercent = 10;
-            }
-            b.setMessage(thresholdLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(thresholdButton);
+        this.addRenderableWidget(new PercentSlider(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT,
+                "Heal Below", 10, 95, NexoraHpConfig.healThresholdPercent,
+                percent -> NexoraHpConfig.healThresholdPercent = percent));
         y += SPACING;
 
         Button slotButton = Button.builder(slotLabel(), b -> {
@@ -70,39 +121,6 @@ public class NexoraHpConfigScreen extends Screen {
             b.setMessage(cooldownLabel());
         }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
         this.addRenderableWidget(cooldownButton);
-        y += SPACING + SECTION_GAP;
-
-        y = section(centerX, y, "PANIC HEAL");
-
-        Button panicEnabledButton = Button.builder(panicEnabledLabel(), b -> {
-            NexoraHpConfig.panicEnabled = !NexoraHpConfig.panicEnabled;
-            b.setMessage(panicEnabledLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(panicEnabledButton);
-        y += SPACING;
-
-        Button panicThresholdButton = Button.builder(panicThresholdLabel(), b -> {
-            NexoraHpConfig.panicThresholdPercent += 5;
-            if (NexoraHpConfig.panicThresholdPercent > 90) {
-                NexoraHpConfig.panicThresholdPercent = 5;
-            }
-            b.setMessage(panicThresholdLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(panicThresholdButton);
-        y += SPACING;
-
-        Button panicSlotButton = Button.builder(panicSlotLabel(), b -> {
-            NexoraHpConfig.panicHotbarSlot = NexoraHpConfig.panicHotbarSlot % 9 + 1;
-            b.setMessage(panicSlotLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(panicSlotButton);
-        y += SPACING;
-
-        Button panicCooldownButton = Button.builder(panicCooldownLabel(), b -> {
-            NexoraHpConfig.panicCooldownSeconds = NexoraHpConfig.panicCooldownSeconds % 60 + 1;
-            b.setMessage(panicCooldownLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(panicCooldownButton);
         y += SPACING + SECTION_GAP;
 
         y = section(centerX, y, "DISPLAY");
@@ -123,15 +141,12 @@ public class NexoraHpConfigScreen extends Screen {
 
         this.addRenderableWidget(Button.builder(Component.literal("Done"), b -> this.onClose())
                 .bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build());
-        y += BUTTON_HEIGHT;
-
-        this.panelBottom = y + 22;
     }
 
     /** Draws a small caps section label with a divider line, and returns the y for the first widget in it. */
     private int section(int centerX, int y, String text) {
         this.sectionHeaders.add(new SectionHeader(text, y));
-        return y + 14;
+        return y + SECTION_HEADER_HEIGHT;
     }
 
     @Override
@@ -157,7 +172,7 @@ public class NexoraHpConfigScreen extends Screen {
             graphics.horizontalLine(lineX1, panelX2 - 20, textY + this.font.lineHeight / 2, 0x40FFFFFF);
         }
 
-        graphics.centeredText(this.font, "Nexora-Wand • v1.0.0", centerX, this.panelBottom - 12, 0xFF55555F);
+        graphics.centeredText(this.font, "Nexora-Heal • v1.0.0", centerX, this.panelBottom - 12, 0xFF55555F);
 
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
     }
@@ -170,10 +185,6 @@ public class NexoraHpConfigScreen extends Screen {
 
     private static Component enabledLabel() {
         return Component.literal("Auto-Heal: " + (NexoraHpConfig.enabled ? "ON" : "OFF"));
-    }
-
-    private static Component thresholdLabel() {
-        return Component.literal("Heal Below: " + NexoraHpConfig.healThresholdPercent + "%");
     }
 
     private static Component slotLabel() {
@@ -190,21 +201,5 @@ public class NexoraHpConfigScreen extends Screen {
 
     private static Component hudPositionLabel() {
         return Component.literal("HUD Position: " + NexoraHpConfig.hudPosition.name().replace('_', ' '));
-    }
-
-    private static Component panicEnabledLabel() {
-        return Component.literal("Panic Heal: " + (NexoraHpConfig.panicEnabled ? "ON" : "OFF"));
-    }
-
-    private static Component panicThresholdLabel() {
-        return Component.literal("Panic Below: " + NexoraHpConfig.panicThresholdPercent + "%");
-    }
-
-    private static Component panicSlotLabel() {
-        return Component.literal("Panic Item Slot: " + NexoraHpConfig.panicHotbarSlot);
-    }
-
-    private static Component panicCooldownLabel() {
-        return Component.literal("Panic Cooldown: " + NexoraHpConfig.panicCooldownSeconds + "s");
     }
 }

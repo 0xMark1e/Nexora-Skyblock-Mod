@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "id": "nexora-wand",
+  "id": "nexora-heal",
   "version": "${version}",
-  "name": "Nexora-Wand",
+  "name": "Nexora-Heal",
   "description": "Auto-uses a healing item below a set HP% by simulating a hotbar switch and right-click.",
   "authors": ["Nexora"],
   "license": "MIT",

@@ -51,15 +51,6 @@ public class NexoraHpMod implements ClientModInitializer {
     private static boolean releasePending = false;
     private static int originalSlot = -1;
 
-    private static boolean needPanic = false;
-    private static boolean panicCanHeal = true;
-    private static long panicCooldownEndsAt = 0L;
-    private static long panicCooldownDurationMillis = 0L;
-    private static boolean panicRotatePending = false;
-    private static boolean panicReleasePending = false;
-    private static int panicOriginalSlot = -1;
-    private static float panicOriginalPitch = 0f;
-
     @Override
     public void onInitializeClient() {
         NexoraHpConfig.load();
@@ -73,7 +64,7 @@ public class NexoraHpMod implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(NexoraHpMod::onClientTick);
 
-        HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("nexora-hp", "heal_indicator"),
+        HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("nexora-heal", "heal_indicator"),
                 (graphics, deltaTracker) -> renderHealIndicator(graphics));
     }
 
@@ -83,40 +74,25 @@ public class NexoraHpMod implements ClientModInitializer {
             return;
         }
 
-        // Release the simulated right-click, then switch back to whatever slot we were on before healing.
-        if (releasePending) {
-            KeyMapping.set(boundKey(client.options.keyUse), false);
-            releasePending = false;
-
-            if (originalSlot >= 0) {
-                KeyMapping.click(boundKey(client.options.keyHotbarSlots[originalSlot]));
-            }
-            originalSlot = -1;
+        // Vanilla only consumes queued hotbar-slot clicks and the use-item key while no screen is
+        // open (Minecraft.tick() gates its call to handleKeybinds() on screen == null). Our own
+        // per-tick logic isn't gated like that by default, so if we kept advancing our state
+        // machine while e.g. the player's inventory or a menu is open, we'd queue a restore click
+        // that sits unconsumed until the screen closes. Pausing everything here keeps our
+        // synthetic input in lockstep with when the game will actually consume it.
+        if (client.screen != null || client.getOverlay() != null) {
+            return;
         }
 
-        // Panic heal release: put the used item's slot and our look direction back.
-        if (panicReleasePending) {
-            KeyMapping.set(boundKey(client.options.keyUse), false);
-            panicReleasePending = false;
-
-            if (panicOriginalSlot >= 0) {
-                KeyMapping.click(boundKey(client.options.keyHotbarSlots[panicOriginalSlot]));
-            }
-            panicOriginalSlot = -1;
-            player.setXRot(panicOriginalPitch);
-        } else if (panicRotatePending) {
-            // The look-down from last tick has now been applied for a full tick -- the client's
-            // normal per-tick sync already reported it to the server via a rotation packet before
-            // this callback runs (LocalPlayer.tick() happens earlier in the same tick). Only now
-            // do we switch to the item's slot and use it, so the server sees "looking down" before
-            // it sees "used the item", exactly matching what the item requires.
-            panicRotatePending = false;
-            beginPanicUse(client, player);
+        // Release the simulated right-click, then switch back to whatever slot we were on before healing.
+        if (releasePending) {
+            releasePending = false;
+            releaseUseAndRestoreSlot(client, originalSlot);
+            originalSlot = -1;
         }
 
         if (!NexoraHpConfig.enabled) {
             needHeal = false;
-            needPanic = false;
             return;
         }
 
@@ -124,24 +100,21 @@ public class NexoraHpMod implements ClientModInitializer {
         if (!canHeal && now >= cooldownEndsAt) {
             canHeal = true;
         }
-        if (!panicCanHeal && now >= panicCooldownEndsAt) {
-            panicCanHeal = true;
-        }
 
         float currentHp = player.getHealth();
         float maxHp = player.getMaxHealth();
         needHeal = maxHp > 0f && currentHp < maxHp * (NexoraHpConfig.healThresholdPercent / 100f);
-        needPanic = NexoraHpConfig.panicEnabled && maxHp > 0f
-                && currentHp < maxHp * (NexoraHpConfig.panicThresholdPercent / 100f);
 
-        // Panic heal takes priority and is mutually exclusive with the regular heal while either
-        // is in flight, since both switch hotbar slots and would otherwise fight over which slot
-        // "wins" in the game's own input processing if both were queued in the same tick.
-        boolean panicBusy = panicRotatePending || panicReleasePending;
-        if (!panicBusy && needPanic && panicCanHeal) {
-            beginPanicRotate(player, now);
-        } else if (!panicBusy && needHeal && canHeal) {
+        if (needHeal && canHeal) {
             triggerHeal(client, player, now);
+        }
+    }
+
+    /** Releases the simulated right-click and, if we switched slots to heal, switches back. */
+    private static void releaseUseAndRestoreSlot(Minecraft client, int originalSlot) {
+        KeyMapping.set(boundKey(client.options.keyUse), false);
+        if (originalSlot >= 0) {
+            KeyMapping.click(boundKey(client.options.keyHotbarSlots[originalSlot]));
         }
     }
 
@@ -166,40 +139,6 @@ public class NexoraHpMod implements ClientModInitializer {
         }
     }
 
-    /** Phase 1: look straight down. The slot switch and item use happen a full tick later. */
-    private static void beginPanicRotate(LocalPlayer player, long now) {
-        // This item needs the player looking at the ground to use. Snap the pitch straight down --
-        // the same field the game's own mouse-look updates via player.turn()/setXRot(). The
-        // client's normal per-tick sync then reports this new look direction to the server on its
-        // own, exactly like a real mouse movement would. We never touch networking directly.
-        panicOriginalPitch = player.getXRot();
-        player.setXRot(90.0F);
-        panicRotatePending = true;
-
-        // Commit to the cooldown immediately so the trigger condition can't fire again mid-sequence.
-        panicCanHeal = false;
-        panicCooldownDurationMillis = NexoraHpConfig.panicCooldownSeconds * 1000L + 500L;
-        panicCooldownEndsAt = now + panicCooldownDurationMillis;
-    }
-
-    /** Phase 2: now that we're confirmed looking down, switch to the item and use it. */
-    private static void beginPanicUse(Minecraft client, LocalPlayer player) {
-        int panicSlotIndex = NexoraHpConfig.panicHotbarSlot - 1;
-        int selectedSlot = player.getInventory().getSelectedSlot();
-
-        if (selectedSlot != panicSlotIndex) {
-            panicOriginalSlot = selectedSlot;
-            KeyMapping.click(boundKey(client.options.keyHotbarSlots[panicSlotIndex]));
-        }
-
-        KeyMapping.set(boundKey(client.options.keyUse), true);
-        panicReleasePending = true;
-
-        if (NexoraHpConfig.soundEnabled) {
-            client.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.EXPERIENCE_ORB_PICKUP, 1.4F));
-        }
-    }
-
     private static final int COLOR_HEADER = 0xFF8A8A9A;
     private static final int COLOR_GREEN = 0xFF5CE65C;
     private static final int COLOR_RED = 0xFFE65C5C;
@@ -216,14 +155,6 @@ public class NexoraHpMod implements ClientModInitializer {
         String label = statusLabel(enabled, canHeal, "HEAL", cooldownEndsAt);
         int barColor = statusColor(enabled, canHeal, cooldownEndsAt, cooldownDurationMillis);
 
-        boolean showPanicRow = NexoraHpConfig.panicEnabled;
-        String panicLabel = showPanicRow
-                ? statusLabel(enabled, panicCanHeal, "PANIC", panicCooldownEndsAt)
-                : null;
-        int panicColor = showPanicRow
-                ? statusColor(enabled, panicCanHeal, panicCooldownEndsAt, panicCooldownDurationMillis)
-                : 0;
-
         float hpRatio = player.getMaxHealth() > 0f ? player.getHealth() / player.getMaxHealth() : 0f;
         int hpColor = lerpColor(COLOR_RED, COLOR_GREEN, Math.max(0f, Math.min(1f, hpRatio)));
         String hpText = Math.round(hpRatio * 100f) + "%";
@@ -233,17 +164,11 @@ public class NexoraHpMod implements ClientModInitializer {
         int barHeight = 3;
         int margin = 8;
         int rowGap = 2;
-        int headerText = font.width("NEXORA-WAND");
+        int headerText = font.width("NEXORA-HEAL");
 
         int contentWidth = Math.max(headerText + font.width(hpText) + 10, Math.max(font.width(label), 96));
-        if (showPanicRow) {
-            contentWidth = Math.max(contentWidth, font.width(panicLabel));
-        }
         int boxWidth = contentWidth + padding * 2;
-
-        // header, heal label+bar, and (if shown) an extra gap + panic label+bar.
-        int boxHeight = padding * 2 + font.lineHeight * (showPanicRow ? 3 : 2) + rowGap * (showPanicRow ? 4 : 2)
-                + barHeight * (showPanicRow ? 2 : 1);
+        int boxHeight = padding * 2 + font.lineHeight * 2 + rowGap * 2 + barHeight;
 
         boolean right = NexoraHpConfig.hudPosition == NexoraHpConfig.HudPosition.TOP_RIGHT
                 || NexoraHpConfig.hudPosition == NexoraHpConfig.HudPosition.BOTTOM_RIGHT;
@@ -265,22 +190,14 @@ public class NexoraHpMod implements ClientModInitializer {
         int barX2 = x2 - padding;
 
         int rowY = y1 + padding;
-        graphics.text(font, "NEXORA-WAND", x1 + padding, rowY, COLOR_HEADER);
+        graphics.text(font, "NEXORA-HEAL", x1 + padding, rowY, COLOR_HEADER);
         graphics.text(font, hpText, x2 - padding - font.width(hpText), rowY, hpColor);
         rowY += font.lineHeight + rowGap;
 
         graphics.text(font, label, x1 + padding, rowY, barColor);
         rowY += font.lineHeight + rowGap;
-        rowY = drawBar(graphics, barX1, barX2, rowY, barHeight, barColor,
+        drawBar(graphics, barX1, barX2, rowY, barHeight, barColor,
                 progressFor(enabled, canHeal, cooldownEndsAt, cooldownDurationMillis));
-
-        if (showPanicRow) {
-            rowY += rowGap;
-            graphics.text(font, panicLabel, x1 + padding, rowY, panicColor);
-            rowY += font.lineHeight + rowGap;
-            drawBar(graphics, barX1, barX2, rowY, barHeight, panicColor,
-                    progressFor(enabled, panicCanHeal, panicCooldownEndsAt, panicCooldownDurationMillis));
-        }
     }
 
     private static String statusLabel(boolean enabled, boolean ready, String name, long cooldownEndsAt) {

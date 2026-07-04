@@ -10,7 +10,7 @@ import net.fabricmc.loader.api.FabricLoader;
 
 public final class NexoraHpConfig {
 
-    private static final Path CONFIG_PATH = FabricLoader.getInstance().getConfigDir().resolve("nexora-wand.properties");
+    private static final Path CONFIG_PATH = FabricLoader.getInstance().getConfigDir().resolve("nexora-heal.properties");
 
     public enum HudPosition {
         TOP_RIGHT, TOP_LEFT, BOTTOM_LEFT, BOTTOM_RIGHT;
@@ -27,11 +27,6 @@ public final class NexoraHpConfig {
     public static int cooldownSeconds = 7;
     public static boolean soundEnabled = true;
     public static HudPosition hudPosition = HudPosition.TOP_RIGHT;
-
-    public static boolean panicEnabled = true;
-    public static int panicThresholdPercent = 30;
-    public static int panicHotbarSlot = 4; // 1-indexed, as shown to the player
-    public static int panicCooldownSeconds = 5;
 
     private NexoraHpConfig() {
     }
@@ -54,11 +49,6 @@ public final class NexoraHpConfig {
         cooldownSeconds = clamp(parseInt(props.getProperty("cooldownSeconds"), cooldownSeconds), 1, 60);
         soundEnabled = Boolean.parseBoolean(props.getProperty("soundEnabled", String.valueOf(soundEnabled)));
         hudPosition = parseHudPosition(props.getProperty("hudPosition"), hudPosition);
-
-        panicEnabled = Boolean.parseBoolean(props.getProperty("panicEnabled", String.valueOf(panicEnabled)));
-        panicThresholdPercent = clamp(parseInt(props.getProperty("panicThresholdPercent"), panicThresholdPercent), 5, 90);
-        panicHotbarSlot = clamp(parseInt(props.getProperty("panicHotbarSlot"), panicHotbarSlot), 1, 9);
-        panicCooldownSeconds = clamp(parseInt(props.getProperty("panicCooldownSeconds"), panicCooldownSeconds), 1, 60);
     }
 
     public static void save() {
@@ -69,11 +59,6 @@ public final class NexoraHpConfig {
         props.setProperty("cooldownSeconds", String.valueOf(cooldownSeconds));
         props.setProperty("soundEnabled", String.valueOf(soundEnabled));
         props.setProperty("hudPosition", hudPosition.name());
-
-        props.setProperty("panicEnabled", String.valueOf(panicEnabled));
-        props.setProperty("panicThresholdPercent", String.valueOf(panicThresholdPercent));
-        props.setProperty("panicHotbarSlot", String.valueOf(panicHotbarSlot));
-        props.setProperty("panicCooldownSeconds", String.valueOf(panicCooldownSeconds));
 
         try (OutputStream out = Files.newOutputStream(CONFIG_PATH)) {
             props.store(out, "Nexora HP settings");
