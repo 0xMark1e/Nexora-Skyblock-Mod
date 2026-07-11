@@ -2,12 +2,10 @@ package com.nexora.hp;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.brigadier.context.CommandContext;
-import java.io.IOException;
 import java.lang.reflect.Field;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.fabricmc.api.ClientModInitializer;
@@ -17,7 +15,6 @@ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -32,15 +29,11 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
-import net.minecraft.util.ProblemReporter;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.entity.EntityTypeTest;
-import net.minecraft.world.level.storage.TagValueOutput;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -106,7 +99,7 @@ public class NexoraHpMod implements ClientModInitializer {
     // The form is signaled by a "td_attune_mode" NBT tag (0-3, see AttunementController for the
     // mapping) -- the item's vanilla material was documented as swapping between Stone/Golden/
     // Iron/Diamond Sword to indicate it, but that turned out to be stale; the material never
-    // actually changes anymore, confirmed via /daggermode dumps. So we switch to whichever dagger
+    // actually changes anymore, confirmed via item dumps (now /dumpitem). So we switch to whichever dagger
     // the current attunement calls for, then tap right-click (a toggle, not a hold) if its tag
     // doesn't already match. The decision logic itself lives in AttunementController, which is
     // unit-tested and simulation-tested independently of Minecraft (see AttunementControllerTest)
@@ -119,10 +112,25 @@ public class NexoraHpMod implements ClientModInitializer {
     private static int fireDaggerSlot = -1;
     private static int twilightDaggerSlot = -1;
 
+    // Auto Soulcry: the three Voidgloom katanas share a right-click ability ("Soulcry", 4s
+    // duration, 4s cooldown) that should stay up for the whole boss fight. The item's data does
+    // not change at all while it's active (confirmed via /dumpitem component dumps taken in
+    // both states), so there is no state to read -- instead, while a Voidgloom Seraph nametag is
+    // nearby and a katana is held, tap right-click once a second: taps during the active window
+    // are rejected by the server at no cost, and the first tap after expiry re-activates it.
+    private static final Set<String> KATANA_IDS = Set.of("VOIDEDGE_KATANA", "VOIDWALKER_KATANA", "VORPAL_KATANA");
+    private static final String VOIDGLOOM_BOSS_NAME = "Voidgloom Seraph";
+    private static final double VOIDGLOOM_SCAN_RADIUS = 30.0;
+    private static final int SOULCRY_RETRY_DELAY_TICKS = 20;
+    private static int soulcryDelayTicks = 0;
+    private static boolean soulcryReleasePending = false;
+    private static boolean soulcryBossNearby = false;
+    private static boolean holdingKatana = false;
+
     // Auto-cake: gifted cakes show up as an invisible armor stand wearing the cake slice as its
     // head equipment, stacked with a "From: <sender>" nametag and, for whichever cake is actually
     // addressed to you, a "CLICK TO EAT" nametag in place of the usual "To: <name>" one (confirmed
-    // via /nearbyents -- other players' pending cakes show "To: <name>" instead, so Hypixel already
+    // via entity dumps (now /dumpentities) -- other players' pending cakes show "To: <name>" instead, so Hypixel already
     // filters this server-side and no username matching is needed). Spams attack+use taps while
     // one's in range, same "click until it's gone" approach as panic heal.
     private static final String CLICK_TO_EAT_TEXT = "CLICK TO EAT";
@@ -143,25 +151,24 @@ public class NexoraHpMod implements ClientModInitializer {
                     .executes(NexoraHpMod::openConfigScreen));
             dispatcher.register(ClientCommands.literal("getid")
                     .executes(NexoraHpMod::getId));
-            dispatcher.register(ClientCommands.literal("daggermode")
-                    .executes(NexoraHpMod::getDaggerMode));
-            dispatcher.register(ClientCommands.literal("nearbyents")
-                    .executes(NexoraHpMod::dumpNearbyEntities));
+            NexoraDebugCommands.register(dispatcher);
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(NexoraHpMod::onClientTick);
 
         // The item only tells us "no charges left" via a chat message (there's no NBT/component
         // field for remaining charges), so that's what drives the panic-heal cooldown.
-        ClientReceiveMessageEvents.GAME.register((message, overlay) -> onChatMessage(message.getString()));
+        ClientReceiveMessageEvents.GAME.register((message, overlay) -> onChatMessage(message.getString(), overlay));
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, type, receptionTimestamp) ->
-                onChatMessage(message.getString()));
+                onChatMessage(message.getString(), false));
 
         HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("nexora-heal", "heal_indicator"),
                 (graphics, deltaTracker) -> renderHealIndicator(graphics));
     }
 
-    private static void onChatMessage(String text) {
+    private static void onChatMessage(String text, boolean actionBar) {
+        NexoraDebugCommands.onMessage(text, actionBar);
+
         if (!panicActive || !text.contains("No more charges")) {
             return;
         }
@@ -174,6 +181,10 @@ public class NexoraHpMod implements ClientModInitializer {
         if (player == null || client.level == null) {
             return;
         }
+
+        // Before the screen gate on purpose: debug watches should keep sampling even while chat
+        // or a menu is open, since they record evidence rather than producing input.
+        NexoraDebugCommands.tick(player);
 
         // Vanilla only consumes queued hotbar-slot clicks and the use-item key while no screen is
         // open (Minecraft.tick() gates its call to handleKeybinds() on screen == null). Our own
@@ -190,6 +201,14 @@ public class NexoraHpMod implements ClientModInitializer {
             releasePending = false;
             releaseUseAndRestoreSlot(client, originalSlot);
             originalSlot = -1;
+        }
+
+        // Unconditional for the same reason as attunement's flushRelease: if a heal or panic
+        // claims the next tick, a pending Soulcry release must still happen or the use-key stays
+        // held and corrupts whatever that subsystem does with it.
+        if (soulcryReleasePending) {
+            soulcryReleasePending = false;
+            KeyMapping.set(boundKey(client.options.keyUse), false);
         }
 
         tickPanic(client, player);
@@ -227,9 +246,12 @@ public class NexoraHpMod implements ClientModInitializer {
         if (willHeal) {
             triggerHeal(client, player, now, wandSlot);
         } else {
-            // Only lets the attunement switcher touch the hotbar/use-key when nothing more
-            // important (panic heal, wand heal) is about to claim them this tick.
+            // Only lets the attunement switcher and Soulcry touch the hotbar/use-key when nothing
+            // more important (panic heal, wand heal) is about to claim them this tick. The two
+            // can't collide with each other: attunement only acts around Blaze bosses holding
+            // daggers, Soulcry only around Voidgloom bosses holding katanas.
             tickAttunementSwitch(client, player);
+            tickAutoSoulcry(client, player);
         }
     }
 
@@ -341,7 +363,7 @@ public class NexoraHpMod implements ClientModInitializer {
 
     /**
      * Auto-cake: while a "CLICK TO EAT" armor stand is nearby, turns the view towards it and taps
-     * attack then use every few ticks -- exactly what a player would do by hand -- until it's gone
+     * attack (left click) every few ticks -- exactly what a player would do by hand -- until it's gone
      * (collected) or out of range. No target *selection* logic needed: the stand only shows this
      * text to the actual recipient and only while standing right next to it, so proximity alone
      * identifies it -- but the click still only lands if the crosshair is actually on it, hence
@@ -372,7 +394,6 @@ public class NexoraHpMod implements ClientModInitializer {
         }
 
         KeyMapping.click(boundKey(client.options.keyAttack));
-        KeyMapping.click(boundKey(client.options.keyUse));
         cakeRetryDelayTicks = CAKE_RETRY_DELAY_TICKS;
     }
 
@@ -402,6 +423,44 @@ public class NexoraHpMod implements ClientModInitializer {
 
         return Mth.degreesDifferenceAbs(newYaw, targetYaw) <= CAKE_AIM_TOLERANCE_DEG
                 && Mth.degreesDifferenceAbs(newPitch, targetPitch) <= CAKE_AIM_TOLERANCE_DEG;
+    }
+
+    /**
+     * Auto Soulcry: while a Voidgloom Seraph is up and a katana is held, taps right-click once a
+     * second so the ability re-activates the moment its 4s duration/cooldown lets it -- see the
+     * KATANA_IDS comment for why this is timer-driven instead of state-driven. The release is
+     * flushed unconditionally at the top of onClientTick, not here, so a heal/panic tick can't
+     * orphan it.
+     */
+    private static void tickAutoSoulcry(Minecraft client, LocalPlayer player) {
+        soulcryBossNearby = false;
+        holdingKatana = KATANA_IDS.contains(extraAttributesId(player.getInventory().getSelectedItem()));
+
+        if (!NexoraHpConfig.autoSoulcryEnabled || panicActive) {
+            soulcryDelayTicks = 0;
+            return;
+        }
+
+        // The boss scan runs before the held-item gate (not after, which would be cheaper) so
+        // the HUD can show "you're at the boss but not holding a katana" as its own state.
+        AABB box = player.getBoundingBox().inflate(VOIDGLOOM_SCAN_RADIUS);
+        List<ArmorStand> stands = client.level.getEntities(EntityTypeTest.forClass(ArmorStand.class), box,
+                stand -> stand.hasCustomName()
+                        && stand.getCustomName().getString().contains(VOIDGLOOM_BOSS_NAME));
+        soulcryBossNearby = !stands.isEmpty();
+        if (!soulcryBossNearby || !holdingKatana) {
+            soulcryDelayTicks = 0;
+            return;
+        }
+
+        if (soulcryDelayTicks > 0) {
+            soulcryDelayTicks--;
+            return;
+        }
+
+        KeyMapping.set(boundKey(client.options.keyUse), true);
+        soulcryReleasePending = true;
+        soulcryDelayTicks = SOULCRY_RETRY_DELAY_TICKS;
     }
 
     /**
@@ -456,7 +515,7 @@ public class NexoraHpMod implements ClientModInitializer {
     /**
      * Reads the dagger's current toggle form off its "td_attune_mode" NBT tag. This used to read
      * the item's vanilla material (documented as swapping between Stone/Golden/Iron/Diamond
-     * Sword), but /daggermode dumps proved that's stale -- the material never actually changes
+     * Sword), but item dumps (now /dumpitem) proved that's stale -- the material never actually changes
      * anymore, and Hypixel signals the mode through this dedicated tag instead.
      */
     private static String daggerModeAttunement(ItemStack stack) {
@@ -598,6 +657,12 @@ public class NexoraHpMod implements ClientModInitializer {
             if ((fireFamily ? fireDaggerSlot : twilightDaggerSlot) < 0) {
                 rows.add(HudRow.text("NO DAGGER", COLOR_AMBER));
             }
+        }
+
+        if (enabled && NexoraHpConfig.autoSoulcryEnabled && soulcryBossNearby) {
+            rows.add(holdingKatana
+                    ? HudRow.text("SOULCRY: ACTIVE", COLOR_GREEN)
+                    : HudRow.text("NO KATANA", COLOR_AMBER));
         }
 
         float hpRatio = player.getMaxHealth() > 0f ? player.getHealth() / player.getMaxHealth() : 0f;
@@ -814,89 +879,8 @@ public class NexoraHpMod implements ClientModInitializer {
         return 1;
     }
 
-    /**
-     * Temporary diagnostic command: dumps the held item's actual vanilla item ID and full raw
-     * NBT. The dagger-mode detection assumes right-clicking swaps the underlying vanilla material
-     * (stone/gold/iron/diamond sword) -- if that's no longer how Hypixel signals the mode, this
-     * is how we'd see it: run it once per mode (toggle manually, run again) and diff the output.
-     */
-    private static int getDaggerMode(CommandContext<FabricClientCommandSource> context) {
-        LocalPlayer player = context.getSource().getPlayer();
-        ItemStack held = player.getInventory().getSelectedItem();
-
-        if (held.isEmpty()) {
-            context.getSource().sendFeedback(
-                    Component.literal("[NEXORA] You're not holding anything").withStyle(ChatFormatting.RED));
-            return 1;
-        }
-
-        context.getSource().sendFeedback(
-                Component.literal("[NEXORA] Vanilla item -> " + held.getItem())
-                        .withStyle(ChatFormatting.GREEN));
-
-        CustomData customData = held.getComponents().get(DataComponents.CUSTOM_DATA);
-        if (customData == null || customData.isEmpty()) {
-            context.getSource().sendFeedback(
-                    Component.literal("[NEXORA] No custom NBT data component").withStyle(ChatFormatting.YELLOW));
-            return 1;
-        }
-
-        String snbt = customData.copyTag().toString();
-        context.getSource().sendFeedback(Component.literal("[NEXORA] NBT (" + snbt.length() + " chars):"));
-        for (int i = 0; i < snbt.length(); i += 400) {
-            context.getSource().sendFeedback(
-                    Component.literal(snbt.substring(i, Math.min(i + 400, snbt.length())))
-                            .withStyle(ChatFormatting.GRAY));
-        }
-
-        return 1;
-    }
-
-    /**
-     * Temporary diagnostic command: dumps every entity within 5 blocks (players excluded, since
-     * the hub is crowded and their NBT isn't useful here) -- type, custom name if any, and full
-     * NBT via saveWithoutId -- to a text file instead of chat, since a hub scene can easily be
-     * dozens of entities' worth of NBT (past what chat scrollback can hold). Built to figure out
-     * what kind of entity a Hypixel gift/cake prop actually is (ArmorStand, TextDisplay, etc.) and
-     * where its "To: <name>" text lives, the same way /daggermode found td_attune_mode instead of
-     * guessing.
-     */
-    private static int dumpNearbyEntities(CommandContext<FabricClientCommandSource> context) {
-        LocalPlayer player = context.getSource().getPlayer();
-        AABB box = player.getBoundingBox().inflate(5.0);
-        List<Entity> nearby = player.level().getEntities(player, box, e -> !(e instanceof Player));
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(nearby.size()).append(" nearby entities:\n\n");
-        for (Entity entity : nearby) {
-            sb.append(entity.getType());
-            if (entity.hasCustomName()) {
-                sb.append(" \"").append(entity.getCustomName().getString()).append("\"");
-            }
-            sb.append('\n');
-
-            TagValueOutput out = TagValueOutput.createWithoutContext(ProblemReporter.DISCARDING);
-            entity.saveWithoutId(out);
-            sb.append(out.buildResult()).append("\n\n");
-        }
-
-        Path path = FabricLoader.getInstance().getConfigDir().resolve("nexora-heal-nearby.txt");
-        try {
-            Files.writeString(path, sb.toString());
-            context.getSource().sendFeedback(
-                    Component.literal("[NEXORA] Wrote " + nearby.size() + " entities -> " + path)
-                            .withStyle(ChatFormatting.GREEN));
-        } catch (IOException e) {
-            context.getSource().sendFeedback(
-                    Component.literal("[NEXORA] Failed to write dump: " + e.getMessage())
-                            .withStyle(ChatFormatting.RED));
-        }
-
-        return 1;
-    }
-
     /** Reads the Skyblock internal item ID (ExtraAttributes.id NBT tag) from an item stack. */
-    private static String extraAttributesId(ItemStack stack) {
+    static String extraAttributesId(ItemStack stack) {
         if (stack.isEmpty()) {
             return "";
         }

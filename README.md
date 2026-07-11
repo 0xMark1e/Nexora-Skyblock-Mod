@@ -42,17 +42,27 @@ state directly, so it behaves identically in singleplayer and multiplayer.
 - **`/showhp`** — prints current/max HP to chat.
 - **`/getid`** — prints the internal Skyblock item ID of whatever you're
   currently holding, for figuring out an item's ID.
+- **Auto Soulcry** — while fighting a Voidgloom Seraph with any of the
+  three slayer katanas (Voidedge, Voidwalker, Vorpal), re-casts the
+  katana's Soulcry ability as soon as it expires, keeping the +200
+  Ferocity buff up for the whole fight. The ability leaves no readable
+  state on the item, so it re-taps right-click once a second — attempts
+  during the active window are rejected by the server at no cost. A HUD
+  row shows when it's running (or when you're at the boss without a
+  katana in hand).
 - **Auto-cake** — automatically looks at and eats cakes gifted to you in
   the hub (the "CLICK TO EAT" prompt), turning the camera smoothly toward
   it and clicking, just like you would by hand.
-- **`/daggermode`** — prints the held dagger's vanilla item type and full
-  NBT, for diagnosing attunement-detection issues.
-- **`/nearbyents`** — dumps nearby entities' types, names, and NBT to
-  `config/nexora-heal-nearby.txt`, for figuring out how a game mechanic
-  is represented.
+- **Debug commands** — a toolkit for figuring out how a game mechanic is
+  actually represented, all appending dumps to `config/nexora-debug/`:
+  `/dumpitem` (held item's full components), `/watchitem` (10s per-tick
+  held-item diff), `/dumpentities [radius]` (nearby entities with NBT),
+  `/dumpinventory`, `/dumpequipment`, `/watchchat` (30s chat/action-bar
+  log), `/dumpscoreboard`, `/dumptablist`, `/dumptarget` (crosshair
+  entity/block), and `/dumpeffects`.
 - **Settings screen** — `/nexora` in chat, or through
   [ModMenu](https://modrinth.com/mod/modmenu) if you have it installed.
-  Sidebar tabs (**Healing**, **Blaze Slayer**, **Display**, **Misc**), a
+  Sidebar tabs (**Healing**, **Slayer**, **Display**, **Misc**), a
   live search box that filters settings across all tabs, tooltips on every
   setting, and a per-tab Defaults reset.
 
@@ -102,6 +112,7 @@ Settings live in `config/nexora-heal.properties` and are editable in-game via
 | Auto Attunement | Master on/off toggle for Blaze Slayer dagger auto-switching |
 | Swap Delay | How long to wait between toggle attempts (ms) |
 | Show Attunement | Toggle the boss's current attunement in the HUD |
+| Auto Soulcry | Keep the katana's Soulcry buff active during Voidgloom fights |
 | Auto Cake | Auto-collect cakes gifted to you (Misc tab) |
 
 ## How it works

@@ -35,6 +35,7 @@ public final class NexoraHpConfig {
     public static final boolean DEFAULT_SHOW_ATTUNEMENT = true;
     public static final boolean DEFAULT_AUTO_ATTUNEMENT_ENABLED = true;
     public static final int DEFAULT_ATTUNEMENT_SWITCH_DELAY_MILLIS = 1000;
+    public static final boolean DEFAULT_AUTO_SOULCRY_ENABLED = true;
     public static final boolean DEFAULT_AUTO_CAKE_ENABLED = true;
 
     public static boolean enabled = DEFAULT_ENABLED;
@@ -49,6 +50,7 @@ public final class NexoraHpConfig {
     public static boolean showAttunement = DEFAULT_SHOW_ATTUNEMENT;
     public static boolean autoAttunementEnabled = DEFAULT_AUTO_ATTUNEMENT_ENABLED;
     public static int attunementSwitchDelayMillis = DEFAULT_ATTUNEMENT_SWITCH_DELAY_MILLIS;
+    public static boolean autoSoulcryEnabled = DEFAULT_AUTO_SOULCRY_ENABLED;
     public static boolean autoCakeEnabled = DEFAULT_AUTO_CAKE_ENABLED;
 
     private NexoraHpConfig() {
@@ -81,6 +83,8 @@ public final class NexoraHpConfig {
         attunementSwitchDelayMillis = clamp(
                 parseInt(props.getProperty("attunementSwitchDelayMillis"), attunementSwitchDelayMillis),
                 AttunementController.MIN_CONFIRM_WINDOW_MILLIS, AttunementController.MAX_CONFIRM_WINDOW_MILLIS);
+        autoSoulcryEnabled = Boolean.parseBoolean(
+                props.getProperty("autoSoulcryEnabled", String.valueOf(autoSoulcryEnabled)));
         autoCakeEnabled = Boolean.parseBoolean(props.getProperty("autoCakeEnabled", String.valueOf(autoCakeEnabled)));
     }
 
@@ -98,6 +102,7 @@ public final class NexoraHpConfig {
         props.setProperty("showAttunement", String.valueOf(showAttunement));
         props.setProperty("autoAttunementEnabled", String.valueOf(autoAttunementEnabled));
         props.setProperty("attunementSwitchDelayMillis", String.valueOf(attunementSwitchDelayMillis));
+        props.setProperty("autoSoulcryEnabled", String.valueOf(autoSoulcryEnabled));
         props.setProperty("autoCakeEnabled", String.valueOf(autoCakeEnabled));
 
         try (OutputStream out = Files.newOutputStream(CONFIG_PATH)) {

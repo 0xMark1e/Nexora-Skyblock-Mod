@@ -44,7 +44,7 @@ public class NexoraHpConfigScreen extends Screen {
 
     private enum Tab {
         HEALING("Healing"),
-        BLAZE_SLAYER("Blaze Slayer"),
+        SLAYER("Slayer"),
         DISPLAY("Display"),
         MISC("Misc");
 
@@ -181,7 +181,7 @@ public class NexoraHpConfigScreen extends Screen {
                                 NexoraHpConfig.panicThresholdPercent,
                                 percent -> NexoraHpConfig.panicThresholdPercent = percent)))));
 
-        out.add(new Section(Tab.BLAZE_SLAYER, "ATTUNEMENT", List.of(
+        out.add(new Section(Tab.SLAYER, "BLAZE SLAYER", List.of(
                 new Setting("auto attunement dagger switch blaze slayer hellion shield",
                         "Auto-switch and toggle your daggers to match the boss's Hellion Shield attunement.",
                         (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::autoAttunementLabel,
@@ -197,6 +197,12 @@ public class NexoraHpConfigScreen extends Screen {
                         "Show the boss's current attunement on the HUD.",
                         (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::showAttunementLabel,
                                 () -> NexoraHpConfig.showAttunement = !NexoraHpConfig.showAttunement)))));
+
+        out.add(new Section(Tab.SLAYER, "ENDERMAN SLAYER", List.of(
+                new Setting("auto soulcry enderman slayer voidgloom katana",
+                        "Keep the katana's Soulcry ability active for the whole Voidgloom fight (re-casts as it expires).",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::autoSoulcryLabel,
+                                () -> NexoraHpConfig.autoSoulcryEnabled = !NexoraHpConfig.autoSoulcryEnabled)))));
 
         out.add(new Section(Tab.DISPLAY, "DISPLAY", List.of(
                 new Setting("show hud enabled overlay indicator hide toggle",
@@ -345,10 +351,11 @@ public class NexoraHpConfigScreen extends Screen {
                 NexoraHpConfig.panicEnabled = NexoraHpConfig.DEFAULT_PANIC_ENABLED;
                 NexoraHpConfig.panicThresholdPercent = NexoraHpConfig.DEFAULT_PANIC_THRESHOLD_PERCENT;
             }
-            case BLAZE_SLAYER -> {
+            case SLAYER -> {
                 NexoraHpConfig.autoAttunementEnabled = NexoraHpConfig.DEFAULT_AUTO_ATTUNEMENT_ENABLED;
                 NexoraHpConfig.attunementSwitchDelayMillis = NexoraHpConfig.DEFAULT_ATTUNEMENT_SWITCH_DELAY_MILLIS;
                 NexoraHpConfig.showAttunement = NexoraHpConfig.DEFAULT_SHOW_ATTUNEMENT;
+                NexoraHpConfig.autoSoulcryEnabled = NexoraHpConfig.DEFAULT_AUTO_SOULCRY_ENABLED;
             }
             case DISPLAY -> {
                 NexoraHpConfig.hudEnabled = NexoraHpConfig.DEFAULT_HUD_ENABLED;
@@ -526,5 +533,9 @@ public class NexoraHpConfigScreen extends Screen {
 
     private static Component showAttunementLabel() {
         return Component.literal("Show Attunement: " + (NexoraHpConfig.showAttunement ? "ON" : "OFF"));
+    }
+
+    private static Component autoSoulcryLabel() {
+        return Component.literal("Auto Soulcry: " + (NexoraHpConfig.autoSoulcryEnabled ? "ON" : "OFF"));
     }
 }

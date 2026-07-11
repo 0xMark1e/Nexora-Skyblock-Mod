@@ -232,8 +232,8 @@ public final class AttunementController {
     /**
      * Maps a dagger's "td_attune_mode" NBT tag to its Hellion Shield attunement. The item's
      * vanilla material was originally documented as swapping between Stone/Golden/Iron/Diamond
-     * Sword to indicate the mode, but that turned out to be stale -- confirmed via /daggermode
-     * dumps that the material never actually changes anymore (both HEARTFIRE_DAGGER and
+     * Sword to indicate the mode, but that turned out to be stale -- confirmed via item component
+     * dumps (now /dumpitem) that the material never actually changes anymore (both HEARTFIRE_DAGGER and
      * HEARTMAW_DAGGER stay on one fixed material regardless of mode); this dedicated integer tag
      * is the real, current signal.
      */
