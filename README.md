@@ -97,6 +97,7 @@ Settings live in `config/nexora-heal.properties` and are editable in-game via
 | Panic Heal | Master on/off toggle for the panic-heal sword |
 | Panic Below % | HP percentage that triggers a panic heal |
 | Heal Sound | Toggle the notification sound on heal |
+| Show HUD | Show or completely hide the HUD overlay |
 | HUD Position | Which screen corner the indicator is drawn in |
 | Auto Attunement | Master on/off toggle for Blaze Slayer dagger auto-switching |
 | Swap Delay | How long to wait between toggle attempts (ms) |

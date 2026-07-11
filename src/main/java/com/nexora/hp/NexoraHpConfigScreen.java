@@ -199,6 +199,10 @@ public class NexoraHpConfigScreen extends Screen {
                                 () -> NexoraHpConfig.showAttunement = !NexoraHpConfig.showAttunement)))));
 
         out.add(new Section(Tab.DISPLAY, "DISPLAY", List.of(
+                new Setting("show hud enabled overlay indicator hide toggle",
+                        "Show the HUD overlay at all. Turn off to hide it completely.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::hudEnabledLabel,
+                                () -> NexoraHpConfig.hudEnabled = !NexoraHpConfig.hudEnabled)),
                 new Setting("heal sound chime notification audio",
                         "Play a chime when a heal fires.",
                         (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::soundLabel,
@@ -347,6 +351,7 @@ public class NexoraHpConfigScreen extends Screen {
                 NexoraHpConfig.showAttunement = NexoraHpConfig.DEFAULT_SHOW_ATTUNEMENT;
             }
             case DISPLAY -> {
+                NexoraHpConfig.hudEnabled = NexoraHpConfig.DEFAULT_HUD_ENABLED;
                 NexoraHpConfig.soundEnabled = NexoraHpConfig.DEFAULT_SOUND_ENABLED;
                 NexoraHpConfig.hudPosition = NexoraHpConfig.DEFAULT_HUD_POSITION;
             }
@@ -489,6 +494,10 @@ public class NexoraHpConfigScreen extends Screen {
 
     private static Component enabledLabel() {
         return Component.literal("Auto-Heal: " + (NexoraHpConfig.enabled ? "ON" : "OFF"));
+    }
+
+    private static Component hudEnabledLabel() {
+        return Component.literal("Show HUD: " + (NexoraHpConfig.hudEnabled ? "ON" : "OFF"));
     }
 
     private static Component soundLabel() {

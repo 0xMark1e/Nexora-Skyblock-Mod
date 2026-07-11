@@ -27,6 +27,7 @@ public final class NexoraHpConfig {
     public static final int DEFAULT_HEAL_THRESHOLD_PERCENT = 70;
     public static final int DEFAULT_COOLDOWN_SECONDS = 7;
     public static final boolean DEFAULT_SOUND_ENABLED = true;
+    public static final boolean DEFAULT_HUD_ENABLED = true;
     public static final HudPosition DEFAULT_HUD_POSITION = HudPosition.TOP_RIGHT;
     public static final boolean DEFAULT_AVOID_RAGNAROCK = true;
     public static final boolean DEFAULT_PANIC_ENABLED = true;
@@ -40,6 +41,7 @@ public final class NexoraHpConfig {
     public static int healThresholdPercent = DEFAULT_HEAL_THRESHOLD_PERCENT;
     public static int cooldownSeconds = DEFAULT_COOLDOWN_SECONDS;
     public static boolean soundEnabled = DEFAULT_SOUND_ENABLED;
+    public static boolean hudEnabled = DEFAULT_HUD_ENABLED;
     public static HudPosition hudPosition = DEFAULT_HUD_POSITION;
     public static boolean avoidRagnarock = DEFAULT_AVOID_RAGNAROCK;
     public static boolean panicEnabled = DEFAULT_PANIC_ENABLED;
@@ -68,6 +70,7 @@ public final class NexoraHpConfig {
         healThresholdPercent = clamp(parseInt(props.getProperty("healThresholdPercent"), healThresholdPercent), 10, 95);
         cooldownSeconds = clamp(parseInt(props.getProperty("cooldownSeconds"), cooldownSeconds), 1, 60);
         soundEnabled = Boolean.parseBoolean(props.getProperty("soundEnabled", String.valueOf(soundEnabled)));
+        hudEnabled = Boolean.parseBoolean(props.getProperty("hudEnabled", String.valueOf(hudEnabled)));
         hudPosition = parseHudPosition(props.getProperty("hudPosition"), hudPosition);
         avoidRagnarock = Boolean.parseBoolean(props.getProperty("avoidRagnarock", String.valueOf(avoidRagnarock)));
         panicEnabled = Boolean.parseBoolean(props.getProperty("panicEnabled", String.valueOf(panicEnabled)));
@@ -87,6 +90,7 @@ public final class NexoraHpConfig {
         props.setProperty("healThresholdPercent", String.valueOf(healThresholdPercent));
         props.setProperty("cooldownSeconds", String.valueOf(cooldownSeconds));
         props.setProperty("soundEnabled", String.valueOf(soundEnabled));
+        props.setProperty("hudEnabled", String.valueOf(hudEnabled));
         props.setProperty("hudPosition", hudPosition.name());
         props.setProperty("avoidRagnarock", String.valueOf(avoidRagnarock));
         props.setProperty("panicEnabled", String.valueOf(panicEnabled));

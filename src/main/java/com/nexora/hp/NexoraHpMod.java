@@ -560,7 +560,7 @@ public class NexoraHpMod implements ClientModInitializer {
     private static void renderHealIndicator(GuiGraphicsExtractor graphics) {
         Minecraft client = Minecraft.getInstance();
         LocalPlayer player = client.player;
-        if (player == null || client.level == null || client.options.hideGui) {
+        if (!NexoraHpConfig.hudEnabled || player == null || client.level == null || client.options.hideGui) {
             return;
         }
 
