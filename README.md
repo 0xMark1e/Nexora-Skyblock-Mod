@@ -1,4 +1,4 @@
-# Nexora-Heal
+# Nexora
 
 ![Minecraft](https://img.shields.io/badge/Minecraft-26.1-3B9F3B?logo=minecraft&logoColor=white)
 ![Fabric](https://img.shields.io/badge/Loader-Fabric-3E7DDA)
@@ -42,12 +42,19 @@ state directly, so it behaves identically in singleplayer and multiplayer.
 - **`/showhp`** — prints current/max HP to chat.
 - **`/getid`** — prints the internal Skyblock item ID of whatever you're
   currently holding, for figuring out an item's ID.
+- **Auto-cake** — automatically looks at and eats cakes gifted to you in
+  the hub (the "CLICK TO EAT" prompt), turning the camera smoothly toward
+  it and clicking, just like you would by hand.
 - **`/daggermode`** — prints the held dagger's vanilla item type and full
   NBT, for diagnosing attunement-detection issues.
+- **`/nearbyents`** — dumps nearby entities' types, names, and NBT to
+  `config/nexora-heal-nearby.txt`, for figuring out how a game mechanic
+  is represented.
 - **Settings screen** — `/nexora` in chat, or through
   [ModMenu](https://modrinth.com/mod/modmenu) if you have it installed.
-  Split into a **Healing** tab (auto-heal, panic heal, HUD) and a
-  **Blaze Slayer** tab (auto-attunement).
+  Sidebar tabs (**Healing**, **Blaze Slayer**, **Display**, **Misc**), a
+  live search box that filters settings across all tabs, tooltips on every
+  setting, and a per-tab Defaults reset.
 
 ## Requirements
 
@@ -94,6 +101,7 @@ Settings live in `config/nexora-heal.properties` and are editable in-game via
 | Auto Attunement | Master on/off toggle for Blaze Slayer dagger auto-switching |
 | Swap Delay | How long to wait between toggle attempts (ms) |
 | Show Attunement | Toggle the boss's current attunement in the HUD |
+| Auto Cake | Auto-collect cakes gifted to you (Misc tab) |
 
 ## How it works
 

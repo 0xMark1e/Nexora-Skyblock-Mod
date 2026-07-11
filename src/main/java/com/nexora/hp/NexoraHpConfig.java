@@ -21,17 +21,33 @@ public final class NexoraHpConfig {
         }
     }
 
-    public static boolean enabled = true;
-    public static int healThresholdPercent = 70;
-    public static int cooldownSeconds = 7;
-    public static boolean soundEnabled = true;
-    public static HudPosition hudPosition = HudPosition.TOP_RIGHT;
-    public static boolean avoidRagnarock = true;
-    public static boolean panicEnabled = true;
-    public static int panicThresholdPercent = 25;
-    public static boolean showAttunement = true;
-    public static boolean autoAttunementEnabled = true;
-    public static int attunementSwitchDelayMillis = 1000;
+    // Defaults live here (not just in the initializers) so the config screen's per-tab
+    // "Defaults" button has a single source of truth to reset back to.
+    public static final boolean DEFAULT_ENABLED = true;
+    public static final int DEFAULT_HEAL_THRESHOLD_PERCENT = 70;
+    public static final int DEFAULT_COOLDOWN_SECONDS = 7;
+    public static final boolean DEFAULT_SOUND_ENABLED = true;
+    public static final HudPosition DEFAULT_HUD_POSITION = HudPosition.TOP_RIGHT;
+    public static final boolean DEFAULT_AVOID_RAGNAROCK = true;
+    public static final boolean DEFAULT_PANIC_ENABLED = true;
+    public static final int DEFAULT_PANIC_THRESHOLD_PERCENT = 25;
+    public static final boolean DEFAULT_SHOW_ATTUNEMENT = true;
+    public static final boolean DEFAULT_AUTO_ATTUNEMENT_ENABLED = true;
+    public static final int DEFAULT_ATTUNEMENT_SWITCH_DELAY_MILLIS = 1000;
+    public static final boolean DEFAULT_AUTO_CAKE_ENABLED = true;
+
+    public static boolean enabled = DEFAULT_ENABLED;
+    public static int healThresholdPercent = DEFAULT_HEAL_THRESHOLD_PERCENT;
+    public static int cooldownSeconds = DEFAULT_COOLDOWN_SECONDS;
+    public static boolean soundEnabled = DEFAULT_SOUND_ENABLED;
+    public static HudPosition hudPosition = DEFAULT_HUD_POSITION;
+    public static boolean avoidRagnarock = DEFAULT_AVOID_RAGNAROCK;
+    public static boolean panicEnabled = DEFAULT_PANIC_ENABLED;
+    public static int panicThresholdPercent = DEFAULT_PANIC_THRESHOLD_PERCENT;
+    public static boolean showAttunement = DEFAULT_SHOW_ATTUNEMENT;
+    public static boolean autoAttunementEnabled = DEFAULT_AUTO_ATTUNEMENT_ENABLED;
+    public static int attunementSwitchDelayMillis = DEFAULT_ATTUNEMENT_SWITCH_DELAY_MILLIS;
+    public static boolean autoCakeEnabled = DEFAULT_AUTO_CAKE_ENABLED;
 
     private NexoraHpConfig() {
     }
@@ -62,6 +78,7 @@ public final class NexoraHpConfig {
         attunementSwitchDelayMillis = clamp(
                 parseInt(props.getProperty("attunementSwitchDelayMillis"), attunementSwitchDelayMillis),
                 AttunementController.MIN_CONFIRM_WINDOW_MILLIS, AttunementController.MAX_CONFIRM_WINDOW_MILLIS);
+        autoCakeEnabled = Boolean.parseBoolean(props.getProperty("autoCakeEnabled", String.valueOf(autoCakeEnabled)));
     }
 
     public static void save() {
@@ -77,6 +94,7 @@ public final class NexoraHpConfig {
         props.setProperty("showAttunement", String.valueOf(showAttunement));
         props.setProperty("autoAttunementEnabled", String.valueOf(autoAttunementEnabled));
         props.setProperty("attunementSwitchDelayMillis", String.valueOf(attunementSwitchDelayMillis));
+        props.setProperty("autoCakeEnabled", String.valueOf(autoCakeEnabled));
 
         try (OutputStream out = Files.newOutputStream(CONFIG_PATH)) {
             props.store(out, "Nexora HP settings");

@@ -2,40 +2,51 @@ package com.nexora.hp;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.IntConsumer;
+import java.util.function.Supplier;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractSliderButton;
+import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
+/**
+ * Settings screen: sidebar tabs on the left, a live search box up top that filters settings
+ * across every tab at once, and a scrollable content column. Rows are plain vanilla widgets
+ * (buttons/sliders) created on demand for whatever slice of the entry list is currently inside
+ * the viewport -- scrolling and searching just rebuild that slice, so there's no custom clipping
+ * or widget-offset bookkeeping to get wrong.
+ */
 public class NexoraHpConfigScreen extends Screen {
 
-    private static final int PANEL_WIDTH = 240;
-    private static final int BUTTON_WIDTH = 200;
-    private static final int BUTTON_HEIGHT = 20;
-    private static final int SPACING = 22;
-    private static final int SECTION_GAP = 14;
-    private static final int SECTION_HEADER_HEIGHT = 14;
-    private static final int TITLE_HEIGHT = 28;
-    private static final int TAB_BAR_HEIGHT = 24;
-    // Clearance between the tab bar's own decorations (active-tab underline, divider line) and
-    // the first section header -- without this, the header's text landed right on top of them.
-    private static final int TAB_CONTENT_GAP = 10;
-    private static final int FOOTER_HEIGHT = 22;
+    private static final int PANEL_WIDTH = 384;
+    private static final int SIDEBAR_WIDTH = 96;
+    private static final int PADDING = 12;
+    private static final int TOP_BAR_HEIGHT = 30;
+    private static final int FOOTER_HEIGHT = 32;
+    private static final int ROW_HEIGHT_PX = 22;
+    private static final int WIDGET_HEIGHT = 20;
+    private static final int HEADER_HEIGHT_PX = 16;
+    // 2 section headers + 6 rows: the Healing tab (the tallest) fits exactly, so scrolling only
+    // ever kicks in for search results that span several tabs.
+    private static final int VIEWPORT_HEIGHT = 2 * HEADER_HEIGHT_PX + 6 * ROW_HEIGHT_PX;
+    private static final int TAB_ROW_HEIGHT = 22;
+    private static final int SEARCH_WIDTH = 110;
+    private static final int SCROLL_GUTTER = 8;
+    private static final int SCROLL_STEP = 14;
     private static final int ACCENT_COLOR = 0xFF5CE6C7;
     private static final int TAB_INACTIVE_COLOR = 0xFF6E6E7A;
 
-    // Row counts per section, used to compute layout height up front instead of hand-tuned offsets.
-    private static final int GENERAL_ROWS = 4;
-    private static final int PANIC_ROWS = 2;
-    private static final int DISPLAY_ROWS = 2;
-    private static final int ATTUNEMENT_ROWS = 3;
-
     private enum Tab {
-        HEALING("HEALING"),
-        BLAZE_SLAYER("BLAZE SLAYER");
+        HEALING("Healing"),
+        BLAZE_SLAYER("Blaze Slayer"),
+        DISPLAY("Display"),
+        MISC("Misc");
 
         final String label;
 
@@ -44,22 +55,47 @@ public class NexoraHpConfigScreen extends Screen {
         }
     }
 
-    private final Screen parent;
-
-    private final List<SectionHeader> sectionHeaders = new ArrayList<>();
-    private Tab currentTab = Tab.HEALING;
-    private int panelTop;
-    private int panelBottom;
-    private int contentTop;
-    private int maxContentHeight;
-    private int tabBarY;
-
-    public NexoraHpConfigScreen(Screen parent) {
-        super(Component.literal("Nexora-Heal"));
-        this.parent = parent;
+    private interface WidgetFactory {
+        AbstractWidget create(int x, int y, int width, int height);
     }
 
-    private record SectionHeader(String text, int y) {
+    /** One row: lowercase haystack the search matches against, a tooltip blurb, and its widget. */
+    private record Setting(String keywords, String description, WidgetFactory factory) {
+    }
+
+    private record Section(Tab tab, String label, List<Setting> settings) {
+    }
+
+    private record HeaderPos(String text, int y) {
+    }
+
+    // Remembered across open/close within a session so reopening lands on the tab you were using.
+    private static Tab activeTab = Tab.HEALING;
+
+    private final Screen parent;
+    private final List<Section> sections = buildSections();
+
+    private String searchQuery = "";
+    private EditBox searchBox;
+    private Button defaultsButton;
+    private final List<AbstractWidget> rowWidgets = new ArrayList<>();
+    private final List<HeaderPos> visibleHeaders = new ArrayList<>();
+    private int scrollAmount = 0;
+    private int totalContentHeight = 0;
+
+    private int panelX1;
+    private int panelX2;
+    private int panelTop;
+    private int panelBottom;
+    private int contentX1;
+    private int contentX2;
+    private int viewportTop;
+    private int viewportBottom;
+    private int footerTop;
+
+    public NexoraHpConfigScreen(Screen parent) {
+        super(Component.literal("Nexora"));
+        this.parent = parent;
     }
 
     /** A draggable slider snapped to a fixed step, over a [min, max] range, with a unit suffix. */
@@ -103,155 +139,236 @@ public class NexoraHpConfigScreen extends Screen {
         }
     }
 
-    private static int sectionHeight(int rows) {
-        return SECTION_HEADER_HEIGHT + rows * SPACING;
+    private static AbstractWidget toggle(int x, int y, int width, int height, Supplier<Component> label,
+            Runnable flip) {
+        return Button.builder(label.get(), b -> {
+            flip.run();
+            b.setMessage(label.get());
+        }).bounds(x, y, width, height).build();
     }
 
-    private static int healingContentHeight() {
-        return sectionHeight(GENERAL_ROWS) + SECTION_GAP + sectionHeight(PANIC_ROWS) + SECTION_GAP
-                + sectionHeight(DISPLAY_ROWS);
-    }
+    private static List<Section> buildSections() {
+        List<Section> out = new ArrayList<>();
 
-    private static int blazeSlayerContentHeight() {
-        return sectionHeight(ATTUNEMENT_ROWS);
+        out.add(new Section(Tab.HEALING, "GENERAL", List.of(
+                new Setting("auto heal enabled master wand toggle",
+                        "Automatically use your healing wand when HP drops below the threshold.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::enabledLabel,
+                                () -> NexoraHpConfig.enabled = !NexoraHpConfig.enabled)),
+                new Setting("heal below threshold percent hp trigger",
+                        "HP percentage that triggers a heal attempt.",
+                        (x, y, w, h) -> new ValueSlider(x, y, w, h, "Heal Below", "%", 10, 95, 5,
+                                NexoraHpConfig.healThresholdPercent,
+                                percent -> NexoraHpConfig.healThresholdPercent = percent)),
+                new Setting("cooldown seconds wand ability wait",
+                        "The wand's ability cooldown -- won't try again until this (+0.5s) has passed.",
+                        (x, y, w, h) -> new ValueSlider(x, y, w, h, "Cooldown", "s", 1, 60, 1,
+                                NexoraHpConfig.cooldownSeconds,
+                                seconds -> NexoraHpConfig.cooldownSeconds = seconds)),
+                new Setting("avoid ragnarock axe interrupt",
+                        "Never interrupt a held Ragnarock to heal -- waits until you switch away yourself.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::avoidRagnarockLabel,
+                                () -> NexoraHpConfig.avoidRagnarock = !NexoraHpConfig.avoidRagnarock)))));
+
+        out.add(new Section(Tab.HEALING, "PANIC HEAL", List.of(
+                new Setting("panic heal enabled emergency florid zombie sword",
+                        "Below the panic threshold, spam the Florid Zombie Sword until its charges run out.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::panicEnabledLabel,
+                                () -> NexoraHpConfig.panicEnabled = !NexoraHpConfig.panicEnabled)),
+                new Setting("panic below threshold percent hp emergency",
+                        "HP percentage that triggers the panic heal.",
+                        (x, y, w, h) -> new ValueSlider(x, y, w, h, "Panic Below", "%", 5, 90, 5,
+                                NexoraHpConfig.panicThresholdPercent,
+                                percent -> NexoraHpConfig.panicThresholdPercent = percent)))));
+
+        out.add(new Section(Tab.BLAZE_SLAYER, "ATTUNEMENT", List.of(
+                new Setting("auto attunement dagger switch blaze slayer hellion shield",
+                        "Auto-switch and toggle your daggers to match the boss's Hellion Shield attunement.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::autoAttunementLabel,
+                                () -> NexoraHpConfig.autoAttunementEnabled = !NexoraHpConfig.autoAttunementEnabled)),
+                new Setting("swap delay milliseconds attunement confirm retry",
+                        "How long to wait for a dagger toggle to take effect before retrying it.",
+                        (x, y, w, h) -> new ValueSlider(x, y, w, h, "Swap Delay", "ms",
+                                AttunementController.MIN_CONFIRM_WINDOW_MILLIS,
+                                AttunementController.MAX_CONFIRM_WINDOW_MILLIS, 50,
+                                NexoraHpConfig.attunementSwitchDelayMillis,
+                                millis -> NexoraHpConfig.attunementSwitchDelayMillis = millis)),
+                new Setting("show attunement hud display boss blaze",
+                        "Show the boss's current attunement on the HUD.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::showAttunementLabel,
+                                () -> NexoraHpConfig.showAttunement = !NexoraHpConfig.showAttunement)))));
+
+        out.add(new Section(Tab.DISPLAY, "DISPLAY", List.of(
+                new Setting("heal sound chime notification audio",
+                        "Play a chime when a heal fires.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::soundLabel,
+                                () -> NexoraHpConfig.soundEnabled = !NexoraHpConfig.soundEnabled)),
+                new Setting("hud position corner overlay indicator",
+                        "Which screen corner the HUD indicator is drawn in.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::hudPositionLabel,
+                                () -> NexoraHpConfig.hudPosition = NexoraHpConfig.hudPosition.next())))));
+
+        out.add(new Section(Tab.MISC, "MISC", List.of(
+                new Setting("auto cake eat gift collect click",
+                        "Automatically look at and eat cakes gifted to you (the CLICK TO EAT prompt).",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::autoCakeLabel,
+                                () -> NexoraHpConfig.autoCakeEnabled = !NexoraHpConfig.autoCakeEnabled)))));
+
+        return out;
     }
 
     @Override
     protected void init() {
-        this.sectionHeaders.clear();
         this.clearWidgets();
+        this.rowWidgets.clear();
+        this.visibleHeaders.clear();
 
-        this.maxContentHeight = Math.max(healingContentHeight(), blazeSlayerContentHeight());
-        int panelHeight = TITLE_HEIGHT + TAB_BAR_HEIGHT + TAB_CONTENT_GAP + this.maxContentHeight + SPACING + 12
-                + BUTTON_HEIGHT + FOOTER_HEIGHT;
-
+        int panelHeight = TOP_BAR_HEIGHT + 8 + VIEWPORT_HEIGHT + 8 + FOOTER_HEIGHT;
         int centerX = this.width / 2;
+        this.panelX1 = centerX - PANEL_WIDTH / 2;
+        this.panelX2 = centerX + PANEL_WIDTH / 2;
         this.panelTop = Math.max(4, this.height / 2 - panelHeight / 2);
         this.panelBottom = this.panelTop + panelHeight;
-        this.tabBarY = this.panelTop + TITLE_HEIGHT;
-        this.contentTop = this.tabBarY + TAB_BAR_HEIGHT + TAB_CONTENT_GAP;
+        this.viewportTop = this.panelTop + TOP_BAR_HEIGHT + 8;
+        this.viewportBottom = this.viewportTop + VIEWPORT_HEIGHT;
+        this.footerTop = this.viewportBottom + 8;
+        this.contentX1 = this.panelX1 + SIDEBAR_WIDTH + PADDING;
+        this.contentX2 = this.panelX2 - PADDING;
 
-        int thisTabHeight = this.currentTab == Tab.HEALING ? healingContentHeight() : blazeSlayerContentHeight();
-        // Center whichever tab's content is shorter than the taller tab, so switching tabs never
-        // resizes the panel or moves the Done button, but a short tab doesn't look stuck at the top.
-        int y = this.contentTop + (this.maxContentHeight - thisTabHeight) / 2;
+        this.searchBox = new EditBox(this.font, this.panelX2 - PADDING - SEARCH_WIDTH + 4, this.panelTop + 10,
+                SEARCH_WIDTH - 8, 12, Component.literal("Search settings"));
+        this.searchBox.setBordered(false);
+        this.searchBox.setMaxLength(64);
+        this.searchBox.setHint(Component.literal("Search..."));
+        this.searchBox.setValue(this.searchQuery);
+        this.searchBox.setResponder(query -> {
+            if (!query.equals(this.searchQuery)) {
+                this.searchQuery = query;
+                this.scrollAmount = 0;
+                this.rebuildRows();
+            }
+        });
+        this.addRenderableWidget(this.searchBox);
 
-        if (this.currentTab == Tab.HEALING) {
-            y = buildHealingTab(centerX, y);
+        this.defaultsButton = Button.builder(Component.literal("Defaults"), b -> {
+            resetTab(activeTab);
+            this.rebuildRows();
+        }).bounds(this.panelX1 + PADDING, this.footerTop + 6, 64, WIDGET_HEIGHT).build();
+        this.defaultsButton.setTooltip(Tooltip.create(Component.literal("Reset this tab's settings to their defaults.")));
+        this.addRenderableWidget(this.defaultsButton);
+
+        this.addRenderableWidget(Button.builder(Component.literal("Done"), b -> this.onClose())
+                .bounds(this.panelX2 - PADDING - 64, this.footerTop + 6, 64, WIDGET_HEIGHT).build());
+
+        this.rebuildRows();
+    }
+
+    /** Headers as Strings, settings as Settings, in display order for the current tab/search. */
+    private List<Object> buildEntries() {
+        List<Object> entries = new ArrayList<>();
+        String query = this.searchQuery.trim().toLowerCase(Locale.ROOT);
+
+        if (query.isEmpty()) {
+            for (Section section : this.sections) {
+                if (section.tab() == activeTab) {
+                    entries.add(section.label());
+                    entries.addAll(section.settings());
+                }
+            }
         } else {
-            y = buildBlazeSlayerTab(centerX, y);
+            for (Section section : this.sections) {
+                List<Setting> hits = section.settings().stream()
+                        .filter(s -> s.keywords().contains(query))
+                        .toList();
+                if (!hits.isEmpty()) {
+                    entries.add(section.tab().label.toUpperCase(Locale.ROOT) + " / " + section.label());
+                    entries.addAll(hits);
+                }
+            }
+        }
+        return entries;
+    }
+
+    /**
+     * Recreates the row widgets for whatever slice of the entry list is inside the viewport.
+     * Entries that would stick out past either edge are simply not created this pass -- they pop
+     * in once scrolled fully into view, which avoids needing scissor-clipping of live widgets.
+     */
+    private void rebuildRows() {
+        for (AbstractWidget widget : this.rowWidgets) {
+            this.removeWidget(widget);
+        }
+        this.rowWidgets.clear();
+        this.visibleHeaders.clear();
+
+        List<Object> entries = buildEntries();
+
+        this.totalContentHeight = 0;
+        for (Object entry : entries) {
+            this.totalContentHeight += entry instanceof String ? HEADER_HEIGHT_PX : ROW_HEIGHT_PX;
+        }
+        this.scrollAmount = Math.max(0, Math.min(this.scrollAmount, this.totalContentHeight - VIEWPORT_HEIGHT));
+
+        int widgetWidth = this.contentX2 - this.contentX1 - SCROLL_GUTTER;
+        int y = -this.scrollAmount;
+        for (Object entry : entries) {
+            int entryHeight = entry instanceof String ? HEADER_HEIGHT_PX : ROW_HEIGHT_PX;
+            if (y >= 0 && y + entryHeight <= VIEWPORT_HEIGHT) {
+                if (entry instanceof String header) {
+                    this.visibleHeaders.add(new HeaderPos(header, this.viewportTop + y));
+                } else {
+                    Setting setting = (Setting) entry;
+                    AbstractWidget widget = setting.factory()
+                            .create(this.contentX1, this.viewportTop + y, widgetWidth, WIDGET_HEIGHT);
+                    widget.setTooltip(Tooltip.create(Component.literal(setting.description())));
+                    this.rowWidgets.add(widget);
+                    this.addRenderableWidget(widget);
+                }
+            }
+            y += entryHeight;
         }
 
-        int doneY = this.contentTop + this.maxContentHeight + SPACING + 12;
-        this.addRenderableWidget(Button.builder(Component.literal("Done"), b -> this.onClose())
-                .bounds(centerX - BUTTON_WIDTH / 2, doneY, BUTTON_WIDTH, BUTTON_HEIGHT).build());
+        this.defaultsButton.active = this.searchQuery.isBlank();
     }
 
-    private int buildHealingTab(int centerX, int y) {
-        y = section(centerX, y, "GENERAL");
-
-        Button enabledButton = Button.builder(enabledLabel(), b -> {
-            NexoraHpConfig.enabled = !NexoraHpConfig.enabled;
-            b.setMessage(enabledLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(enabledButton);
-        y += SPACING;
-
-        this.addRenderableWidget(new ValueSlider(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT,
-                "Heal Below", "%", 10, 95, 5, NexoraHpConfig.healThresholdPercent,
-                percent -> NexoraHpConfig.healThresholdPercent = percent));
-        y += SPACING;
-
-        Button cooldownButton = Button.builder(cooldownLabel(), b -> {
-            NexoraHpConfig.cooldownSeconds = NexoraHpConfig.cooldownSeconds % 60 + 1;
-            b.setMessage(cooldownLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(cooldownButton);
-        y += SPACING;
-
-        Button avoidRagnarockButton = Button.builder(avoidRagnarockLabel(), b -> {
-            NexoraHpConfig.avoidRagnarock = !NexoraHpConfig.avoidRagnarock;
-            b.setMessage(avoidRagnarockLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(avoidRagnarockButton);
-        y += SPACING + SECTION_GAP;
-
-        y = section(centerX, y, "PANIC HEAL");
-
-        Button panicEnabledButton = Button.builder(panicEnabledLabel(), b -> {
-            NexoraHpConfig.panicEnabled = !NexoraHpConfig.panicEnabled;
-            b.setMessage(panicEnabledLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(panicEnabledButton);
-        y += SPACING;
-
-        this.addRenderableWidget(new ValueSlider(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT,
-                "Panic Below", "%", 5, 90, 5, NexoraHpConfig.panicThresholdPercent,
-                percent -> NexoraHpConfig.panicThresholdPercent = percent));
-        y += SPACING + SECTION_GAP;
-
-        y = section(centerX, y, "DISPLAY");
-
-        Button soundButton = Button.builder(soundLabel(), b -> {
-            NexoraHpConfig.soundEnabled = !NexoraHpConfig.soundEnabled;
-            b.setMessage(soundLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(soundButton);
-        y += SPACING;
-
-        Button hudPositionButton = Button.builder(hudPositionLabel(), b -> {
-            NexoraHpConfig.hudPosition = NexoraHpConfig.hudPosition.next();
-            b.setMessage(hudPositionLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(hudPositionButton);
-        y += SPACING;
-
-        return y;
-    }
-
-    private int buildBlazeSlayerTab(int centerX, int y) {
-        y = section(centerX, y, "ATTUNEMENT");
-
-        Button autoAttunementButton = Button.builder(autoAttunementLabel(), b -> {
-            NexoraHpConfig.autoAttunementEnabled = !NexoraHpConfig.autoAttunementEnabled;
-            b.setMessage(autoAttunementLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(autoAttunementButton);
-        y += SPACING;
-
-        this.addRenderableWidget(new ValueSlider(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT,
-                "Swap Delay", "ms", AttunementController.MIN_CONFIRM_WINDOW_MILLIS,
-                AttunementController.MAX_CONFIRM_WINDOW_MILLIS, 50, NexoraHpConfig.attunementSwitchDelayMillis,
-                millis -> NexoraHpConfig.attunementSwitchDelayMillis = millis));
-        y += SPACING;
-
-        Button showAttunementButton = Button.builder(showAttunementLabel(), b -> {
-            NexoraHpConfig.showAttunement = !NexoraHpConfig.showAttunement;
-            b.setMessage(showAttunementLabel());
-        }).bounds(centerX - BUTTON_WIDTH / 2, y, BUTTON_WIDTH, BUTTON_HEIGHT).build();
-        this.addRenderableWidget(showAttunementButton);
-        y += SPACING;
-
-        return y;
-    }
-
-    /** Draws a small caps section label with a divider line, and returns the y for the first widget in it. */
-    private int section(int centerX, int y, String text) {
-        this.sectionHeaders.add(new SectionHeader(text, y));
-        return y + SECTION_HEADER_HEIGHT;
+    private static void resetTab(Tab tab) {
+        switch (tab) {
+            case HEALING -> {
+                NexoraHpConfig.enabled = NexoraHpConfig.DEFAULT_ENABLED;
+                NexoraHpConfig.healThresholdPercent = NexoraHpConfig.DEFAULT_HEAL_THRESHOLD_PERCENT;
+                NexoraHpConfig.cooldownSeconds = NexoraHpConfig.DEFAULT_COOLDOWN_SECONDS;
+                NexoraHpConfig.avoidRagnarock = NexoraHpConfig.DEFAULT_AVOID_RAGNAROCK;
+                NexoraHpConfig.panicEnabled = NexoraHpConfig.DEFAULT_PANIC_ENABLED;
+                NexoraHpConfig.panicThresholdPercent = NexoraHpConfig.DEFAULT_PANIC_THRESHOLD_PERCENT;
+            }
+            case BLAZE_SLAYER -> {
+                NexoraHpConfig.autoAttunementEnabled = NexoraHpConfig.DEFAULT_AUTO_ATTUNEMENT_ENABLED;
+                NexoraHpConfig.attunementSwitchDelayMillis = NexoraHpConfig.DEFAULT_ATTUNEMENT_SWITCH_DELAY_MILLIS;
+                NexoraHpConfig.showAttunement = NexoraHpConfig.DEFAULT_SHOW_ATTUNEMENT;
+            }
+            case DISPLAY -> {
+                NexoraHpConfig.soundEnabled = NexoraHpConfig.DEFAULT_SOUND_ENABLED;
+                NexoraHpConfig.hudPosition = NexoraHpConfig.DEFAULT_HUD_POSITION;
+            }
+            case MISC -> NexoraHpConfig.autoCakeEnabled = NexoraHpConfig.DEFAULT_AUTO_CAKE_ENABLED;
+        }
     }
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
-        if (event.button() == 0 && event.y() >= this.tabBarY && event.y() < this.tabBarY + TAB_BAR_HEIGHT) {
-            int centerX = this.width / 2;
-            int panelX1 = centerX - PANEL_WIDTH / 2;
-            int panelX2 = centerX + PANEL_WIDTH / 2;
-            if (event.x() >= panelX1 && event.x() < panelX2) {
-                Tab clicked = event.x() < centerX ? Tab.HEALING : Tab.BLAZE_SLAYER;
-                if (clicked != this.currentTab) {
-                    this.currentTab = clicked;
-                    this.init();
+        if (event.button() == 0 && event.x() >= this.panelX1 && event.x() < this.panelX1 + SIDEBAR_WIDTH
+                && event.y() >= this.viewportTop && event.y() < this.viewportBottom) {
+            int index = (int) ((event.y() - this.viewportTop) / TAB_ROW_HEIGHT);
+            Tab[] tabs = Tab.values();
+            if (index >= 0 && index < tabs.length) {
+                Tab clicked = tabs[index];
+                boolean searching = !this.searchQuery.isBlank();
+                if (clicked != activeTab || searching) {
+                    activeTab = clicked;
+                    this.searchQuery = "";
+                    this.searchBox.setValue("");
+                    this.scrollAmount = 0;
+                    this.rebuildRows();
                 }
                 return true;
             }
@@ -260,55 +377,94 @@ public class NexoraHpConfigScreen extends Screen {
     }
 
     @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (mouseX >= this.contentX1 && mouseX < this.panelX2
+                && mouseY >= this.viewportTop && mouseY < this.viewportBottom
+                && this.totalContentHeight > VIEWPORT_HEIGHT) {
+            this.scrollAmount -= (int) (scrollY * SCROLL_STEP);
+            this.rebuildRows();
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, this.width, this.height, 0x99050507);
 
-        int centerX = this.width / 2;
-        int panelX1 = centerX - PANEL_WIDTH / 2;
-        int panelX2 = centerX + PANEL_WIDTH / 2;
         int panelHeight = this.panelBottom - this.panelTop;
+        graphics.fillGradient(this.panelX1, this.panelTop, this.panelX2, this.panelBottom, 0xF0181822, 0xF00E0E16);
+        graphics.outline(this.panelX1, this.panelTop, PANEL_WIDTH, panelHeight, 0x22FFFFFF);
+        drawCornerBrackets(graphics, this.panelX1, this.panelTop, this.panelX2, this.panelBottom, 10, ACCENT_COLOR);
+        graphics.fill(this.panelX1 + 1, this.panelTop + 1, this.panelX2 - 1, this.panelTop + 3, ACCENT_COLOR);
 
-        graphics.fillGradient(panelX1, this.panelTop, panelX2, this.panelBottom, 0xF0181822, 0xF00E0E16);
-        graphics.outline(panelX1, this.panelTop, PANEL_WIDTH, panelHeight, 0x22FFFFFF);
-        drawCornerBrackets(graphics, panelX1, this.panelTop, panelX2, this.panelBottom, 10, ACCENT_COLOR);
-        graphics.fill(panelX1 + 1, this.panelTop + 1, panelX2 - 1, this.panelTop + 3, ACCENT_COLOR);
+        graphics.text(this.font, this.title, this.panelX1 + PADDING, this.panelTop + 11, 0xFFFFFFFF);
 
-        graphics.centeredText(this.font, this.title, centerX, this.panelTop + 9, 0xFFFFFFFF);
+        // Search box backdrop (the EditBox itself is borderless so it can sit on our own styling).
+        int searchX1 = this.panelX2 - PADDING - SEARCH_WIDTH;
+        graphics.fill(searchX1, this.panelTop + 6, this.panelX2 - PADDING, this.panelTop + 24, 0xFF0A0A10);
+        graphics.outline(searchX1, this.panelTop + 6, SEARCH_WIDTH, 18,
+                this.searchBox.isFocused() ? ACCENT_COLOR : 0x33FFFFFF);
 
-        drawTabBar(graphics, panelX1, panelX2, centerX);
+        graphics.horizontalLine(this.panelX1 + 1, this.panelX2 - 2, this.panelTop + TOP_BAR_HEIGHT - 1, 0x30FFFFFF);
 
-        for (SectionHeader header : this.sectionHeaders) {
-            // Draw near the top of this section's own reserved SECTION_HEADER_HEIGHT block,
-            // rather than backing up from the first widget below it -- that backward offset was
-            // tuned for the old layout and landed on top of the tab bar's own decorations once
-            // the tab bar was inserted above it.
-            int textY = header.y() + 3;
-            graphics.text(this.font, header.text(), panelX1 + 20, textY, ACCENT_COLOR);
-            int lineX1 = panelX1 + 20 + this.font.width(header.text()) + 6;
-            graphics.horizontalLine(lineX1, panelX2 - 20, textY + this.font.lineHeight / 2, 0x40FFFFFF);
+        // Sidebar.
+        graphics.fill(this.panelX1 + 1, this.panelTop + TOP_BAR_HEIGHT, this.panelX1 + SIDEBAR_WIDTH,
+                this.panelBottom - 1, 0x40000000);
+        graphics.verticalLine(this.panelX1 + SIDEBAR_WIDTH, this.panelTop + TOP_BAR_HEIGHT - 1, this.panelBottom - 1,
+                0x30FFFFFF);
+
+        boolean searching = !this.searchQuery.isBlank();
+        Tab[] tabs = Tab.values();
+        for (int i = 0; i < tabs.length; i++) {
+            int tabY = this.viewportTop + i * TAB_ROW_HEIGHT;
+            boolean active = !searching && tabs[i] == activeTab;
+            boolean hovered = mouseX >= this.panelX1 && mouseX < this.panelX1 + SIDEBAR_WIDTH
+                    && mouseY >= tabY && mouseY < tabY + TAB_ROW_HEIGHT;
+            if (active) {
+                graphics.fill(this.panelX1 + 1, tabY, this.panelX1 + SIDEBAR_WIDTH, tabY + TAB_ROW_HEIGHT,
+                        0x205CE6C7);
+                graphics.fill(this.panelX1 + 1, tabY + 3, this.panelX1 + 3, tabY + TAB_ROW_HEIGHT - 3, ACCENT_COLOR);
+            } else if (hovered) {
+                graphics.fill(this.panelX1 + 1, tabY, this.panelX1 + SIDEBAR_WIDTH, tabY + TAB_ROW_HEIGHT,
+                        0x18FFFFFF);
+            }
+            int color = active ? 0xFFFFFFFF : TAB_INACTIVE_COLOR;
+            graphics.text(this.font, tabs[i].label, this.panelX1 + 10,
+                    tabY + (TAB_ROW_HEIGHT - this.font.lineHeight) / 2 + 1, color);
         }
 
-        graphics.centeredText(this.font, "Nexora-Heal • v1.0.0", centerX, this.panelBottom - 12, 0xFF55555F);
+        // Section headers for the rows currently in view.
+        for (HeaderPos header : this.visibleHeaders) {
+            int textY = header.y() + 4;
+            graphics.text(this.font, header.text(), this.contentX1, textY, ACCENT_COLOR);
+            int lineX1 = this.contentX1 + this.font.width(header.text()) + 6;
+            graphics.horizontalLine(lineX1, this.contentX2 - SCROLL_GUTTER, textY + this.font.lineHeight / 2,
+                    0x40FFFFFF);
+        }
+
+        if (searching && this.rowWidgets.isEmpty() && this.visibleHeaders.isEmpty()) {
+            graphics.centeredText(this.font, "No matching settings",
+                    (this.contentX1 + this.contentX2) / 2,
+                    (this.viewportTop + this.viewportBottom) / 2 - this.font.lineHeight / 2, 0xFF808089);
+        }
+
+        // Scrollbar, only when there's actually something to scroll.
+        if (this.totalContentHeight > VIEWPORT_HEIGHT) {
+            int trackX1 = this.contentX2 - 3;
+            graphics.fill(trackX1, this.viewportTop, this.contentX2 - 1, this.viewportBottom, 0x22FFFFFF);
+            int thumbHeight = Math.max(12, VIEWPORT_HEIGHT * VIEWPORT_HEIGHT / this.totalContentHeight);
+            int thumbY = this.viewportTop + this.scrollAmount * (VIEWPORT_HEIGHT - thumbHeight)
+                    / (this.totalContentHeight - VIEWPORT_HEIGHT);
+            graphics.fill(trackX1, thumbY, this.contentX2 - 1, thumbY + thumbHeight, ACCENT_COLOR);
+        }
+
+        // Footer.
+        graphics.horizontalLine(this.panelX1 + 1, this.panelX2 - 2, this.footerTop, 0x30FFFFFF);
+        graphics.centeredText(this.font, "Nexora • v1.0.0", (this.panelX1 + this.panelX2) / 2,
+                this.footerTop + 12, 0xFF55555F);
 
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-    }
-
-    private void drawTabBar(GuiGraphicsExtractor graphics, int panelX1, int panelX2, int centerX) {
-        int textY = this.tabBarY + 6;
-        for (Tab tab : Tab.values()) {
-            boolean active = tab == this.currentTab;
-            int zoneX1 = tab == Tab.HEALING ? panelX1 : centerX;
-            int zoneX2 = tab == Tab.HEALING ? centerX : panelX2;
-            int zoneCenterX = (zoneX1 + zoneX2) / 2;
-            int color = active ? 0xFFFFFFFF : TAB_INACTIVE_COLOR;
-            graphics.centeredText(this.font, tab.label, zoneCenterX, textY, color);
-            if (active) {
-                int textWidth = this.font.width(tab.label);
-                graphics.fill(zoneCenterX - textWidth / 2 - 2, this.tabBarY + TAB_BAR_HEIGHT - 5,
-                        zoneCenterX + textWidth / 2 + 2, this.tabBarY + TAB_BAR_HEIGHT - 3, ACCENT_COLOR);
-            }
-        }
-        graphics.horizontalLine(panelX1 + 12, panelX2 - 12, this.tabBarY + TAB_BAR_HEIGHT - 1, 0x30FFFFFF);
     }
 
     /** Four accent-colored corner brackets instead of a full border -- matches the HUD's look. */
@@ -335,10 +491,6 @@ public class NexoraHpConfigScreen extends Screen {
         return Component.literal("Auto-Heal: " + (NexoraHpConfig.enabled ? "ON" : "OFF"));
     }
 
-    private static Component cooldownLabel() {
-        return Component.literal("Cooldown: " + NexoraHpConfig.cooldownSeconds + "s");
-    }
-
     private static Component soundLabel() {
         return Component.literal("Heal Sound: " + (NexoraHpConfig.soundEnabled ? "ON" : "OFF"));
     }
@@ -353,6 +505,10 @@ public class NexoraHpConfigScreen extends Screen {
 
     private static Component panicEnabledLabel() {
         return Component.literal("Panic Heal: " + (NexoraHpConfig.panicEnabled ? "ON" : "OFF"));
+    }
+
+    private static Component autoCakeLabel() {
+        return Component.literal("Auto Cake: " + (NexoraHpConfig.autoCakeEnabled ? "ON" : "OFF"));
     }
 
     private static Component autoAttunementLabel() {

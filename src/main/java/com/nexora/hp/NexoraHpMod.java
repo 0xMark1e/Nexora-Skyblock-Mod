@@ -2,7 +2,10 @@ package com.nexora.hp;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.brigadier.context.CommandContext;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -14,6 +17,7 @@ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -21,17 +25,24 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
+import net.minecraft.util.Mth;
+import net.minecraft.util.ProblemReporter;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.entity.EntityTypeTest;
+import net.minecraft.world.level.storage.TagValueOutput;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 public class NexoraHpMod implements ClientModInitializer {
 
@@ -108,6 +119,19 @@ public class NexoraHpMod implements ClientModInitializer {
     private static int fireDaggerSlot = -1;
     private static int twilightDaggerSlot = -1;
 
+    // Auto-cake: gifted cakes show up as an invisible armor stand wearing the cake slice as its
+    // head equipment, stacked with a "From: <sender>" nametag and, for whichever cake is actually
+    // addressed to you, a "CLICK TO EAT" nametag in place of the usual "To: <name>" one (confirmed
+    // via /nearbyents -- other players' pending cakes show "To: <name>" instead, so Hypixel already
+    // filters this server-side and no username matching is needed). Spams attack+use taps while
+    // one's in range, same "click until it's gone" approach as panic heal.
+    private static final String CLICK_TO_EAT_TEXT = "CLICK TO EAT";
+    private static final double CAKE_SCAN_RADIUS = 4.0;
+    private static final int CAKE_RETRY_DELAY_TICKS = 5;
+    private static final float CAKE_TURN_SPEED_DEG = 12.0f;
+    private static final float CAKE_AIM_TOLERANCE_DEG = 4.0f;
+    private static int cakeRetryDelayTicks = 0;
+
     @Override
     public void onInitializeClient() {
         NexoraHpConfig.load();
@@ -121,6 +145,8 @@ public class NexoraHpMod implements ClientModInitializer {
                     .executes(NexoraHpMod::getId));
             dispatcher.register(ClientCommands.literal("daggermode")
                     .executes(NexoraHpMod::getDaggerMode));
+            dispatcher.register(ClientCommands.literal("nearbyents")
+                    .executes(NexoraHpMod::dumpNearbyEntities));
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(NexoraHpMod::onClientTick);
@@ -168,6 +194,7 @@ public class NexoraHpMod implements ClientModInitializer {
 
         tickPanic(client, player);
         scanAttunement(client, player);
+        tickAutoCake(client, player);
 
         if (!NexoraHpConfig.enabled) {
             needHeal = false;
@@ -310,6 +337,71 @@ public class NexoraHpMod implements ClientModInitializer {
 
         String detected = AttunementController.selectAttunement(readings);
         currentAttunement = attunementController.debounceAttunement(detected);
+    }
+
+    /**
+     * Auto-cake: while a "CLICK TO EAT" armor stand is nearby, turns the view towards it and taps
+     * attack then use every few ticks -- exactly what a player would do by hand -- until it's gone
+     * (collected) or out of range. No target *selection* logic needed: the stand only shows this
+     * text to the actual recipient and only while standing right next to it, so proximity alone
+     * identifies it -- but the click still only lands if the crosshair is actually on it, hence
+     * turnTowards. Skipped during panic heal so the two don't fight over the use-key on the same tick.
+     */
+    private static void tickAutoCake(Minecraft client, LocalPlayer player) {
+        if (!NexoraHpConfig.autoCakeEnabled || panicActive) {
+            cakeRetryDelayTicks = 0;
+            return;
+        }
+
+        AABB box = player.getBoundingBox().inflate(CAKE_SCAN_RADIUS);
+        List<ArmorStand> stands = client.level.getEntities(EntityTypeTest.forClass(ArmorStand.class), box,
+                stand -> stand.hasCustomName() && CLICK_TO_EAT_TEXT.equals(stand.getCustomName().getString()));
+
+        if (stands.isEmpty()) {
+            cakeRetryDelayTicks = 0;
+            return;
+        }
+
+        if (!turnTowards(player, stands.get(0).getEyePosition())) {
+            return;
+        }
+
+        if (cakeRetryDelayTicks > 0) {
+            cakeRetryDelayTicks--;
+            return;
+        }
+
+        KeyMapping.click(boundKey(client.options.keyAttack));
+        KeyMapping.click(boundKey(client.options.keyUse));
+        cakeRetryDelayTicks = CAKE_RETRY_DELAY_TICKS;
+    }
+
+    /**
+     * Turns the player's view a bounded number of degrees per tick toward the given point, like a
+     * player glancing over at it, rather than snapping instantly (which both looks broken and can
+     * still miss the interact raycast on the tick it fires if the snap overshoots). Returns true
+     * once the view is close enough that the click below will actually land.
+     */
+    private static boolean turnTowards(LocalPlayer player, Vec3 target) {
+        float fromYaw = player.getYRot();
+        float fromPitch = player.getXRot();
+
+        // Borrow vanilla's own look-at math (the same used by e.g. "/execute facing") instead of
+        // re-deriving the yaw/pitch trig ourselves: point there, read back the angles it computed,
+        // then undo it so the bounded turn below is applied deliberately instead of snapping.
+        player.lookAt(EntityAnchorArgument.Anchor.EYES, target);
+        float targetYaw = player.getYRot();
+        float targetPitch = player.getXRot();
+        player.setYRot(fromYaw);
+        player.setXRot(fromPitch);
+
+        float newYaw = Mth.approachDegrees(fromYaw, targetYaw, CAKE_TURN_SPEED_DEG);
+        float newPitch = Mth.approachDegrees(fromPitch, targetPitch, CAKE_TURN_SPEED_DEG);
+        player.setYRot(newYaw);
+        player.setXRot(newPitch);
+
+        return Mth.degreesDifferenceAbs(newYaw, targetYaw) <= CAKE_AIM_TOLERANCE_DEG
+                && Mth.degreesDifferenceAbs(newPitch, targetPitch) <= CAKE_AIM_TOLERANCE_DEG;
     }
 
     /**
@@ -523,7 +615,7 @@ public class NexoraHpMod implements ClientModInitializer {
         // Measure the header with its actual "§l" bold prefix -- bold glyphs render wider than
         // the plain text, so measuring the plain string undersized the box and let the HP% text
         // crowd into the title.
-        int headerText = font.width("§lNEXORA-HEAL");
+        int headerText = font.width("§lNEXORA");
 
         int contentWidth = Math.max(headerText + font.width(hpText) + 10, 100);
         for (HudRow row : rows) {
@@ -567,7 +659,7 @@ public class NexoraHpMod implements ClientModInitializer {
         int barX2 = x2 - padding;
 
         int rowY = y1 + padding;
-        graphics.text(font, "§lNEXORA-HEAL", x1 + padding, rowY, COLOR_ACCENT);
+        graphics.text(font, "§lNEXORA", x1 + padding, rowY, COLOR_ACCENT);
         graphics.text(font, hpText, x2 - padding - font.width(hpText), rowY, hpColor);
         rowY += font.lineHeight + 2;
         graphics.fill(barX1, rowY - 1, barX2, rowY, (COLOR_ACCENT & 0x00FFFFFF) | 0x50000000);
@@ -755,6 +847,49 @@ public class NexoraHpMod implements ClientModInitializer {
             context.getSource().sendFeedback(
                     Component.literal(snbt.substring(i, Math.min(i + 400, snbt.length())))
                             .withStyle(ChatFormatting.GRAY));
+        }
+
+        return 1;
+    }
+
+    /**
+     * Temporary diagnostic command: dumps every entity within 5 blocks (players excluded, since
+     * the hub is crowded and their NBT isn't useful here) -- type, custom name if any, and full
+     * NBT via saveWithoutId -- to a text file instead of chat, since a hub scene can easily be
+     * dozens of entities' worth of NBT (past what chat scrollback can hold). Built to figure out
+     * what kind of entity a Hypixel gift/cake prop actually is (ArmorStand, TextDisplay, etc.) and
+     * where its "To: <name>" text lives, the same way /daggermode found td_attune_mode instead of
+     * guessing.
+     */
+    private static int dumpNearbyEntities(CommandContext<FabricClientCommandSource> context) {
+        LocalPlayer player = context.getSource().getPlayer();
+        AABB box = player.getBoundingBox().inflate(5.0);
+        List<Entity> nearby = player.level().getEntities(player, box, e -> !(e instanceof Player));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(nearby.size()).append(" nearby entities:\n\n");
+        for (Entity entity : nearby) {
+            sb.append(entity.getType());
+            if (entity.hasCustomName()) {
+                sb.append(" \"").append(entity.getCustomName().getString()).append("\"");
+            }
+            sb.append('\n');
+
+            TagValueOutput out = TagValueOutput.createWithoutContext(ProblemReporter.DISCARDING);
+            entity.saveWithoutId(out);
+            sb.append(out.buildResult()).append("\n\n");
+        }
+
+        Path path = FabricLoader.getInstance().getConfigDir().resolve("nexora-heal-nearby.txt");
+        try {
+            Files.writeString(path, sb.toString());
+            context.getSource().sendFeedback(
+                    Component.literal("[NEXORA] Wrote " + nearby.size() + " entities -> " + path)
+                            .withStyle(ChatFormatting.GREEN));
+        } catch (IOException e) {
+            context.getSource().sendFeedback(
+                    Component.literal("[NEXORA] Failed to write dump: " + e.getMessage())
+                            .withStyle(ChatFormatting.RED));
         }
 
         return 1;
