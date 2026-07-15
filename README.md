@@ -41,6 +41,9 @@ state directly, so it behaves identically in singleplayer and multiplayer.
   or while holding Ragnarock (if avoidance is on).
 - **`/testtext <message>`** — flashes the message as a big neon-pink
   announcement title in the upper middle of the screen.
+- **`/testdrop <item name>`** — the same announcement with the item's
+  live price in orange-gold, e.g. "Chimera (32.1m)" — bazaar insta-sell
+  price when the item is bazaar-traded, AH lowest BIN otherwise.
 - **`/showhp`** — prints current/max HP to chat.
 - **`/getid`** — prints the internal Skyblock item ID of whatever you're
   currently holding, for figuring out an item's ID.
@@ -60,6 +63,17 @@ state directly, so it behaves identically in singleplayer and multiplayer.
 - **Auto-cake** — automatically looks at and eats cakes gifted to you in
   the hub (the "CLICK TO EAT" prompt), turning the camera smoothly toward
   it and clicking, just like you would by hand.
+- **Drop announcements** — when chat announces a CRAZY RARE DROP! (neon
+  pink) or INSANE DROP! (red), flashes the animated title with the item's
+  live bazaar/AH price in gold, e.g. "Necron's Handle (475.0m)".
+- **Sea creature alert** — when a notable fishing creature spawns
+  (detected by nametag, e.g. Puddle Jumper), flashes a red alert with a
+  chime — once per creature — then helps you find it: a mid-screen
+  locator with distance and turn arrows, a tracer line from the crosshair
+  toward it, and a vanilla glowing outline on the mob itself. Tracks out
+  to render distance until it dies or despawns. A per-creature checkbox
+  list in the Fishing tab picks which creatures alert (Puddle Jumper,
+  Thunder, Lord Jawbus, Ragnarok, and more).
 - **Debug commands** — a toolkit for figuring out how a game mechanic is
   actually represented, all appending dumps to `config/nexora-debug/`:
   `/dumpitem` (held item's full components), `/watchitem` (10s per-tick
@@ -69,7 +83,7 @@ state directly, so it behaves identically in singleplayer and multiplayer.
   entity/block), and `/dumpeffects`.
 - **Settings screen** — `/nexora` in chat, or through
   [ModMenu](https://modrinth.com/mod/modmenu) if you have it installed.
-  Sidebar tabs (**Healing**, **Slayer**, **Display**, **Misc**), a
+  Sidebar tabs (**Healing**, **Slayer**, **Fishing**, **Display**, **Misc**), a
   live search box that filters settings across all tabs, tooltips on every
   setting, and a per-tab Defaults reset.
 
@@ -122,6 +136,8 @@ Settings live in `config/nexora-heal.properties` and are editable in-game via
 | Auto Deployable | Place your hotbar orb/flare when a slayer boss spawns |
 | Auto Soulcry | Keep the katana's Soulcry buff active during Voidgloom fights |
 | Auto Cake | Auto-collect cakes gifted to you (Misc tab) |
+| Drop Announce | Flash the title with live price on CRAZY RARE/INSANE drops |
+| Creature Alert | Red alert + glow when a notable fishing creature spawns (Fishing tab) |
 
 ## How it works
 

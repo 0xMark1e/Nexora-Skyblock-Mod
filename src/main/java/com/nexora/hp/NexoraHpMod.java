@@ -31,10 +31,12 @@ import net.minecraft.world.item.ItemStack;
  * happen; every feature goes through them.</li>
  * <li>{@link SkyblockItems} / {@link EntityScan} / {@link Sidebar} -- shared game-state readers
  * (item IDs, named armor stands, scoreboard lines).</li>
- * <li>{@link AutoCake}, {@link AutoSoulcry}, {@link AutoDeployable} -- one class per feature,
- * each with its own tick and (where it holds a key across ticks) an unconditional flush.</li>
+ * <li>{@link AutoCake}, {@link AutoSoulcry}, {@link AutoDeployable}, {@link SeaCreatureAlert},
+ * {@link DropAnnouncer} -- one class per feature, each with its own tick/message hook and (where
+ * it holds a key across ticks) an unconditional flush.</li>
  * <li>{@link AttunementController} -- the Blaze dagger decision logic, Minecraft-free and
  * unit-tested; this class only feeds it inputs and executes its IO.</li>
+ * <li>{@link Prices} -- async bazaar/AH price lookups (plain HTTPS to public APIs).</li>
  * <li>{@link Hud} / {@link TitleOverlay} -- rendering.</li>
  * <li>{@link NexoraDebugCommands} -- the /dump* and /watch* reverse-engineering toolkit.</li>
  * </ul>
@@ -101,8 +103,14 @@ public class NexoraHpMod implements ClientModInitializer {
                                 TitleOverlay.show(StringArgumentType.getString(context, "text"));
                                 return 1;
                             })));
+            dispatcher.register(ClientCommands.literal("testdrop")
+                    .then(ClientCommands.argument("item", StringArgumentType.greedyString())
+                            .executes(NexoraHpMod::testDrop)));
             NexoraDebugCommands.register(dispatcher);
         });
+
+        // Prewarm the bazaar price cache so the first drop announcement doesn't wait on a 3MB fetch.
+        Prices.refreshBazaarIfStale();
 
         ClientTickEvents.END_CLIENT_TICK.register(NexoraHpMod::onClientTick);
 
@@ -116,10 +124,17 @@ public class NexoraHpMod implements ClientModInitializer {
                 (graphics, deltaTracker) -> Hud.render(graphics));
         HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("nexora-heal", "title_overlay"),
                 (graphics, deltaTracker) -> TitleOverlay.render(graphics));
+        HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("nexora-heal", "creature_locator"),
+                (graphics, deltaTracker) -> SeaCreatureAlert.renderLocator(graphics));
     }
 
     private static void onChatMessage(String text, boolean actionBar) {
         NexoraDebugCommands.onMessage(text, actionBar);
+
+        // Drop announcements only ever come as real chat lines; the action bar is per-tick spam.
+        if (!actionBar) {
+            DropAnnouncer.onMessage(text);
+        }
 
         if (!panicActive || !text.contains("No more charges")) {
             return;
@@ -165,6 +180,7 @@ public class NexoraHpMod implements ClientModInitializer {
         tickPanic(client, player);
         scanAttunement(client, player);
         AutoCake.tick(client, player);
+        SeaCreatureAlert.tick(client, player);
 
         if (!NexoraHpConfig.enabled) {
             needHeal = false;
@@ -405,6 +421,34 @@ public class NexoraHpMod implements ClientModInitializer {
                             .withStyle(ChatFormatting.GREEN));
         }
 
+        return 1;
+    }
+
+    /**
+     * Dry run of the rare-drop announcement: looks the item up on bazaar/AH and flashes the title
+     * with its price. The lookup completes on an HTTP thread, so the result hops back onto the
+     * client thread before touching the overlay or chat.
+     */
+    private static int testDrop(CommandContext<FabricClientCommandSource> context) {
+        String name = StringArgumentType.getString(context, "item");
+        FabricClientCommandSource source = context.getSource();
+        Minecraft client = Minecraft.getInstance();
+
+        Prices.lookup(name).thenAccept(quote -> client.execute(() -> {
+            if (quote.isPresent()) {
+                TitleOverlay.showDrop(Prices.displayName(name, quote.get().itemId()),
+                        Prices.formatCoins(quote.get().price()));
+                source.sendFeedback(Component.literal(
+                        "[NEXORA] " + quote.get().itemId() + " -> " + String.format("%,.0f", quote.get().price())
+                                + " coins (" + quote.get().source() + ")")
+                        .withStyle(ChatFormatting.GREEN));
+            } else {
+                TitleOverlay.show(Prices.displayName(name));
+                source.sendFeedback(Component.literal(
+                        "[NEXORA] No bazaar or AH price found for \"" + name + "\"")
+                        .withStyle(ChatFormatting.RED));
+            }
+        }));
         return 1;
     }
 

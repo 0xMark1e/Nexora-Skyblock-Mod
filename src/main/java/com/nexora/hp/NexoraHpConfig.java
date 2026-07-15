@@ -5,7 +5,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.Properties;
+import java.util.Set;
 import net.fabricmc.loader.api.FabricLoader;
 
 public final class NexoraHpConfig {
@@ -38,6 +40,8 @@ public final class NexoraHpConfig {
     public static final boolean DEFAULT_AUTO_SOULCRY_ENABLED = true;
     public static final boolean DEFAULT_AUTO_DEPLOYABLE_ENABLED = true;
     public static final boolean DEFAULT_AUTO_CAKE_ENABLED = true;
+    public static final boolean DEFAULT_DROP_ANNOUNCEMENTS_ENABLED = true;
+    public static final boolean DEFAULT_SEA_CREATURE_ALERT_ENABLED = true;
 
     public static boolean enabled = DEFAULT_ENABLED;
     public static int healThresholdPercent = DEFAULT_HEAL_THRESHOLD_PERCENT;
@@ -54,6 +58,10 @@ public final class NexoraHpConfig {
     public static boolean autoSoulcryEnabled = DEFAULT_AUTO_SOULCRY_ENABLED;
     public static boolean autoDeployableEnabled = DEFAULT_AUTO_DEPLOYABLE_ENABLED;
     public static boolean autoCakeEnabled = DEFAULT_AUTO_CAKE_ENABLED;
+    public static boolean dropAnnouncementsEnabled = DEFAULT_DROP_ANNOUNCEMENTS_ENABLED;
+    public static boolean seaCreatureAlertEnabled = DEFAULT_SEA_CREATURE_ALERT_ENABLED;
+    /** Creature names unchecked in the alert list; empty (everything alerts) by default. */
+    public static Set<String> disabledCreatures = new HashSet<>();
 
     private NexoraHpConfig() {
     }
@@ -90,6 +98,16 @@ public final class NexoraHpConfig {
         autoDeployableEnabled = Boolean.parseBoolean(
                 props.getProperty("autoDeployableEnabled", String.valueOf(autoDeployableEnabled)));
         autoCakeEnabled = Boolean.parseBoolean(props.getProperty("autoCakeEnabled", String.valueOf(autoCakeEnabled)));
+        dropAnnouncementsEnabled = Boolean.parseBoolean(
+                props.getProperty("dropAnnouncementsEnabled", String.valueOf(dropAnnouncementsEnabled)));
+        seaCreatureAlertEnabled = Boolean.parseBoolean(
+                props.getProperty("seaCreatureAlertEnabled", String.valueOf(seaCreatureAlertEnabled)));
+        disabledCreatures = new HashSet<>();
+        for (String name : props.getProperty("disabledCreatures", "").split(";")) {
+            if (!name.isBlank()) {
+                disabledCreatures.add(name);
+            }
+        }
     }
 
     public static void save() {
@@ -109,6 +127,9 @@ public final class NexoraHpConfig {
         props.setProperty("autoSoulcryEnabled", String.valueOf(autoSoulcryEnabled));
         props.setProperty("autoDeployableEnabled", String.valueOf(autoDeployableEnabled));
         props.setProperty("autoCakeEnabled", String.valueOf(autoCakeEnabled));
+        props.setProperty("dropAnnouncementsEnabled", String.valueOf(dropAnnouncementsEnabled));
+        props.setProperty("seaCreatureAlertEnabled", String.valueOf(seaCreatureAlertEnabled));
+        props.setProperty("disabledCreatures", String.join(";", disabledCreatures));
 
         try (OutputStream out = Files.newOutputStream(CONFIG_PATH)) {
             props.store(out, "Nexora HP settings");

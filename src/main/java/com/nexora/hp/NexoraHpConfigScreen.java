@@ -1,14 +1,18 @@
 package com.nexora.hp;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.IntConsumer;
 import java.util.function.Supplier;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
@@ -45,6 +49,7 @@ public class NexoraHpConfigScreen extends Screen {
     private enum Tab {
         HEALING("Healing"),
         SLAYER("Slayer"),
+        FISHING("Fishing"),
         DISPLAY("Display"),
         MISC("Misc");
 
@@ -63,10 +68,17 @@ public class NexoraHpConfigScreen extends Screen {
     private record Setting(String keywords, String description, WidgetFactory factory) {
     }
 
-    private record Section(Tab tab, String label, List<Setting> settings) {
+    private record Section(Tab tab, String label, List<Setting> settings, boolean collapsible) {
+        Section(Tab tab, String label, List<Setting> settings) {
+            this(tab, label, settings, false);
+        }
     }
 
-    private record HeaderPos(String text, int y) {
+    /** A header row in the entry list; carries its Section so collapsible ones can take clicks. */
+    private record HeaderEntry(String display, Section section) {
+    }
+
+    private record HeaderPos(String text, Section section, int y) {
     }
 
     // Remembered across open/close within a session so reopening lands on the tab you were using.
@@ -93,9 +105,18 @@ public class NexoraHpConfigScreen extends Screen {
     private int viewportBottom;
     private int footerTop;
 
+    // Labels of collapsible sections currently folded shut. Seeded with every collapsible
+    // section, so bulky lists (the creature checklist) start closed each time the menu opens.
+    private final Set<String> collapsedSections = new HashSet<>();
+
     public NexoraHpConfigScreen(Screen parent) {
         super(Component.literal("Nexora"));
         this.parent = parent;
+        for (Section section : this.sections) {
+            if (section.collapsible()) {
+                this.collapsedSections.add(section.label());
+            }
+        }
     }
 
     /** A draggable slider snapped to a fixed step, over a [min, max] range, with a unit suffix. */
@@ -210,6 +231,35 @@ public class NexoraHpConfigScreen extends Screen {
                         (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::autoSoulcryLabel,
                                 () -> NexoraHpConfig.autoSoulcryEnabled = !NexoraHpConfig.autoSoulcryEnabled)))));
 
+        out.add(new Section(Tab.FISHING, "SEA CREATURES", List.of(
+                new Setting("sea creature alert fishing spawn glow puddle jumper",
+                        "Red alert title when a notable creature spawns, and keeps the mob glowing so it's easy to find.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::seaCreatureAlertLabel,
+                                () -> NexoraHpConfig.seaCreatureAlertEnabled =
+                                        !NexoraHpConfig.seaCreatureAlertEnabled)))));
+
+        // One checkbox per known creature -- unchecked ones are ignored entirely (no alert,
+        // locator, or glow). Generated from the alert's own list so new creatures show up here
+        // automatically.
+        List<Setting> creatureChecks = new ArrayList<>();
+        for (String creature : SeaCreatureAlert.CREATURE_NAMES) {
+            creatureChecks.add(new Setting("creature checklist " + creature.toLowerCase(Locale.ROOT),
+                    "Alert (and track) when a " + creature + " spawns.",
+                    (x, y, w, h) -> Checkbox.builder(Component.literal(creature), Minecraft.getInstance().font)
+                            .pos(x, y)
+                            .selected(!NexoraHpConfig.disabledCreatures.contains(creature))
+                            .onValueChange((checkbox, checked) -> {
+                                if (checked) {
+                                    NexoraHpConfig.disabledCreatures.remove(creature);
+                                } else {
+                                    NexoraHpConfig.disabledCreatures.add(creature);
+                                }
+                            })
+                            .maxWidth(w)
+                            .build()));
+        }
+        out.add(new Section(Tab.FISHING, "ALERT LIST", List.copyOf(creatureChecks), true));
+
         out.add(new Section(Tab.DISPLAY, "DISPLAY", List.of(
                 new Setting("show hud enabled overlay indicator hide toggle",
                         "Show the HUD overlay at all. Turn off to hide it completely.",
@@ -228,7 +278,12 @@ public class NexoraHpConfigScreen extends Screen {
                 new Setting("auto cake eat gift collect click",
                         "Automatically look at and eat cakes gifted to you (the CLICK TO EAT prompt).",
                         (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::autoCakeLabel,
-                                () -> NexoraHpConfig.autoCakeEnabled = !NexoraHpConfig.autoCakeEnabled)))));
+                                () -> NexoraHpConfig.autoCakeEnabled = !NexoraHpConfig.autoCakeEnabled)),
+                new Setting("drop announcements crazy rare insane title price",
+                        "Flash the big title with the item's live price on CRAZY RARE (pink) and INSANE (red) drops.",
+                        (x, y, w, h) -> toggle(x, y, w, h, NexoraHpConfigScreen::dropAnnouncementsLabel,
+                                () -> NexoraHpConfig.dropAnnouncementsEnabled =
+                                        !NexoraHpConfig.dropAnnouncementsEnabled)))));
 
         return out;
     }
@@ -286,18 +341,25 @@ public class NexoraHpConfigScreen extends Screen {
 
         if (query.isEmpty()) {
             for (Section section : this.sections) {
-                if (section.tab() == activeTab) {
-                    entries.add(section.label());
+                if (section.tab() != activeTab) {
+                    continue;
+                }
+                boolean collapsed = section.collapsible() && this.collapsedSections.contains(section.label());
+                String display = section.label() + (section.collapsible() ? (collapsed ? " [+]" : " [-]") : "");
+                entries.add(new HeaderEntry(display, section));
+                if (!collapsed) {
                     entries.addAll(section.settings());
                 }
             }
         } else {
+            // Search overrides collapsing: a match inside a folded section still shows up.
             for (Section section : this.sections) {
                 List<Setting> hits = section.settings().stream()
                         .filter(s -> s.keywords().contains(query))
                         .toList();
                 if (!hits.isEmpty()) {
-                    entries.add(section.tab().label.toUpperCase(Locale.ROOT) + " / " + section.label());
+                    entries.add(new HeaderEntry(
+                            section.tab().label.toUpperCase(Locale.ROOT) + " / " + section.label(), null));
                     entries.addAll(hits);
                 }
             }
@@ -321,17 +383,17 @@ public class NexoraHpConfigScreen extends Screen {
 
         this.totalContentHeight = 0;
         for (Object entry : entries) {
-            this.totalContentHeight += entry instanceof String ? HEADER_HEIGHT_PX : ROW_HEIGHT_PX;
+            this.totalContentHeight += entry instanceof HeaderEntry ? HEADER_HEIGHT_PX : ROW_HEIGHT_PX;
         }
         this.scrollAmount = Math.max(0, Math.min(this.scrollAmount, this.totalContentHeight - VIEWPORT_HEIGHT));
 
         int widgetWidth = this.contentX2 - this.contentX1 - SCROLL_GUTTER;
         int y = -this.scrollAmount;
         for (Object entry : entries) {
-            int entryHeight = entry instanceof String ? HEADER_HEIGHT_PX : ROW_HEIGHT_PX;
+            int entryHeight = entry instanceof HeaderEntry ? HEADER_HEIGHT_PX : ROW_HEIGHT_PX;
             if (y >= 0 && y + entryHeight <= VIEWPORT_HEIGHT) {
-                if (entry instanceof String header) {
-                    this.visibleHeaders.add(new HeaderPos(header, this.viewportTop + y));
+                if (entry instanceof HeaderEntry header) {
+                    this.visibleHeaders.add(new HeaderPos(header.display(), header.section(), this.viewportTop + y));
                 } else {
                     Setting setting = (Setting) entry;
                     AbstractWidget widget = setting.factory()
@@ -364,17 +426,39 @@ public class NexoraHpConfigScreen extends Screen {
                 NexoraHpConfig.showAttunement = NexoraHpConfig.DEFAULT_SHOW_ATTUNEMENT;
                 NexoraHpConfig.autoSoulcryEnabled = NexoraHpConfig.DEFAULT_AUTO_SOULCRY_ENABLED;
             }
+            case FISHING -> {
+                NexoraHpConfig.seaCreatureAlertEnabled = NexoraHpConfig.DEFAULT_SEA_CREATURE_ALERT_ENABLED;
+                NexoraHpConfig.disabledCreatures.clear();
+            }
             case DISPLAY -> {
                 NexoraHpConfig.hudEnabled = NexoraHpConfig.DEFAULT_HUD_ENABLED;
                 NexoraHpConfig.soundEnabled = NexoraHpConfig.DEFAULT_SOUND_ENABLED;
                 NexoraHpConfig.hudPosition = NexoraHpConfig.DEFAULT_HUD_POSITION;
             }
-            case MISC -> NexoraHpConfig.autoCakeEnabled = NexoraHpConfig.DEFAULT_AUTO_CAKE_ENABLED;
+            case MISC -> {
+                NexoraHpConfig.autoCakeEnabled = NexoraHpConfig.DEFAULT_AUTO_CAKE_ENABLED;
+                NexoraHpConfig.dropAnnouncementsEnabled = NexoraHpConfig.DEFAULT_DROP_ANNOUNCEMENTS_ENABLED;
+            }
         }
     }
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+        // Collapsible section headers toggle open/shut on click.
+        if (event.button() == 0 && event.x() >= this.contentX1 && event.x() < this.contentX2) {
+            for (HeaderPos header : this.visibleHeaders) {
+                if (header.section() != null && header.section().collapsible()
+                        && event.y() >= header.y() && event.y() < header.y() + HEADER_HEIGHT_PX) {
+                    String label = header.section().label();
+                    if (!this.collapsedSections.remove(label)) {
+                        this.collapsedSections.add(label);
+                    }
+                    this.rebuildRows();
+                    return true;
+                }
+            }
+        }
+
         if (event.button() == 0 && event.x() >= this.panelX1 && event.x() < this.panelX1 + SIDEBAR_WIDTH
                 && event.y() >= this.viewportTop && event.y() < this.viewportBottom) {
             int index = (int) ((event.y() - this.viewportTop) / TAB_ROW_HEIGHT);
@@ -532,6 +616,14 @@ public class NexoraHpConfigScreen extends Screen {
 
     private static Component autoCakeLabel() {
         return Component.literal("Auto Cake: " + (NexoraHpConfig.autoCakeEnabled ? "ON" : "OFF"));
+    }
+
+    private static Component dropAnnouncementsLabel() {
+        return Component.literal("Drop Announce: " + (NexoraHpConfig.dropAnnouncementsEnabled ? "ON" : "OFF"));
+    }
+
+    private static Component seaCreatureAlertLabel() {
+        return Component.literal("Creature Alert: " + (NexoraHpConfig.seaCreatureAlertEnabled ? "ON" : "OFF"));
     }
 
     private static Component autoAttunementLabel() {
