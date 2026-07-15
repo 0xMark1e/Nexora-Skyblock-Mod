@@ -564,7 +564,7 @@ public class NexoraHpConfigScreen extends Screen {
 
         // Footer.
         graphics.horizontalLine(this.panelX1 + 1, this.panelX2 - 2, this.footerTop, 0x30FFFFFF);
-        graphics.centeredText(this.font, "Nexora • v1.0.0", (this.panelX1 + this.panelX2) / 2,
+        graphics.centeredText(this.font, "Nexora • v1.0.4", (this.panelX1 + this.panelX2) / 2,
                 this.footerTop + 12, 0xFF55555F);
 
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);

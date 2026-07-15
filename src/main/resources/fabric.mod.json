@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "nexora-heal",
-  "version": "${version}",
+  "version": "1.0.4",
   "name": "Nexora",
   "description": "Hypixel Skyblock helper: auto-heal, panic heal, Blaze Slayer auto-attunement, and more -- all via simulated key presses.",
   "authors": ["Nexora"],
